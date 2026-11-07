@@ -5,11 +5,12 @@ delays between requests to stay within provider limits.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import time
 from typing import Dict, Optional
 from collections import deque
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,39 @@ class ProviderRateLimiter:
 
         return delay
 
+    async def acquire(self, max_wait_seconds: Optional[float] = None) -> float:
+        """Reserve one request atomically within this event loop.
+
+        The optional budget covers all waiting in this acquisition, including
+        contention after waking. It does not bound a complete provider fetch.
+        """
+        if max_wait_seconds is not None and (
+            not math.isfinite(max_wait_seconds) or max_wait_seconds < 0
+        ):
+            raise ValueError("max_wait_seconds must be finite and nonnegative")
+        started = time.monotonic()
+        waited = False
+        while True:
+            if self.is_circuit_open():
+                raise ProviderRateLimitWaitExceeded(
+                    f"{self.config.name} is temporarily rate-limited; cooldown is active"
+                )
+            elapsed = time.monotonic() - started
+            delay = self.get_delay_until_ready()
+            if max_wait_seconds is not None and (
+                (waited and elapsed > max_wait_seconds)
+                or (delay > 0 and delay > max_wait_seconds - elapsed)
+            ):
+                raise ProviderRateLimitWaitExceeded(
+                    f"{self.config.name} is temporarily rate-limited; admission wait budget exceeded"
+                )
+            if delay <= 0:
+                # No suspension between the final checks and reservation.
+                self.record_request()
+                return elapsed
+            await asyncio.sleep(delay)
+            waited = True
+
     def record_request(self) -> None:
         """Record that a request was just made."""
         now = time.time()
@@ -154,7 +188,7 @@ class ProviderRateLimiter:
         if self.config.max_requests_per_hour is not None:
             self.hour_window.append(now)
 
-    def record_rate_limit_error(self) -> None:
+    def record_rate_limit_error(self, retry_after_seconds: Optional[float] = None) -> None:
         """Record that a 429 rate limit error was received.
 
         Opens the circuit breaker to prevent further requests until cooldown expires.
@@ -167,16 +201,19 @@ class ProviderRateLimiter:
         cooldown_durations = [60, 120, 300, 600]
         cooldown_index = min(self._consecutive_429_count - 1, len(cooldown_durations) - 1)
         cooldown = cooldown_durations[cooldown_index]
-
-        self._circuit_open_until = now + cooldown
+        if retry_after_seconds is not None and math.isfinite(retry_after_seconds):
+            cooldown = max(cooldown, retry_after_seconds)
+        self._circuit_open_until = max(self._circuit_open_until or now, now + cooldown)
         logger.warning(
-            f"🚫 {self.config.name} circuit breaker OPEN: "
-            f"Rate limit hit {self._consecutive_429_count} time(s). "
-            f"Cooldown: {cooldown}s until {datetime.fromtimestamp(self._circuit_open_until).strftime('%H:%M:%S')}"
+            "🚫 %s circuit breaker OPEN: rate limit hit %d time(s); cooldown %.1fs",
+            self.config.name, self._consecutive_429_count, self._circuit_open_until - now,
         )
 
     def record_success(self) -> None:
         """Record a successful request - resets circuit breaker."""
+        # A request admitted before another request's 429 cannot revoke its cooldown.
+        if self.is_circuit_open():
+            return
         if self._consecutive_429_count > 0:
             logger.info(f"✅ {self.config.name} circuit breaker CLOSED: Request succeeded after rate limiting")
         self._consecutive_429_count = 0
@@ -348,16 +385,21 @@ async def wait_for_provider(provider: str, max_wait_seconds: Optional[float] = N
     return await limiter.wait_until_ready(max_wait_seconds=max_wait_seconds)
 
 
+async def acquire_provider(provider: str, max_wait_seconds: Optional[float] = None) -> float:
+    """Wait and reserve one request in this process's provider limiter."""
+    return await get_global_rate_limiter().get_limiter(provider).acquire(max_wait_seconds)
+
+
 def record_provider_request(provider: str) -> None:
     """Record that a request was made to a provider."""
     limiter = get_global_rate_limiter().get_limiter(provider)
     limiter.record_request()
 
 
-def record_provider_rate_limit_error(provider: str) -> None:
+def record_provider_rate_limit_error(provider: str, retry_after_seconds: Optional[float] = None) -> None:
     """Record that a 429 rate limit error was received from a provider."""
     limiter = get_global_rate_limiter().get_limiter(provider)
-    limiter.record_rate_limit_error()
+    limiter.record_rate_limit_error(retry_after_seconds)
 
 
 def record_provider_success(provider: str) -> None:

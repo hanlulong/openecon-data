@@ -26,7 +26,7 @@ def no_rate_limit_wait(monkeypatch):
     async def ready(_provider):
         pass
 
-    monkeypatch.setattr("backend.providers.base.wait_for_provider", ready)
+    monkeypatch.setattr("backend.providers.base.acquire_provider", ready)
 
 
 async def fetch(provider, client):

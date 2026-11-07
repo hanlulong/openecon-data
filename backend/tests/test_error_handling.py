@@ -71,16 +71,18 @@ def _mock_response(status_code: int = 200, json_data=None, headers=None, text=""
 # ─── HTTP 429 Rate Limit Tests ───────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_429_rate_limit_raises_data_not_available():
-    """HTTP 429 should retry and eventually raise DataNotAvailableError."""
+async def test_429_rate_limit_fails_once_and_opens_cooldown():
+    """HTTP 429 establishes cooldown without an immediate second request."""
     provider = _fresh_provider()
     provider.MAX_RETRIES = 2  # Speed up test
 
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get.return_value = _mock_response(429, headers={"Retry-After": "1"})
 
-    with pytest.raises(DataNotAvailableError, match="retries"):
+    with pytest.raises(DataNotAvailableError, match="Rate limited"):
         await provider._get_with_retry(client, "https://api.example.com/data")
+
+    assert client.get.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -325,18 +327,18 @@ async def test_post_with_retry_404_immediate_fail():
 
 
 @pytest.mark.asyncio
-async def test_post_with_retry_429_retries_then_fails():
-    """POST 429 should now retry + record rate-limit reset (parity with GET)."""
+async def test_post_429_fails_once_and_records_cooldown():
+    """POST establishes cooldown and fails promptly, like GET."""
     provider = _fresh_provider()
     provider.MAX_RETRIES = 2
 
     client = AsyncMock(spec=httpx.AsyncClient)
     client.post.return_value = _mock_response(429, headers={"Retry-After": "1"})
 
-    with pytest.raises(DataNotAvailableError, match="retries"):
+    with pytest.raises(DataNotAvailableError, match="Rate limited"):
         await provider._post_with_retry(client, "https://api.example.com/data")
     assert provider.rate_limit_reset is not None
-    assert client.post.call_count == 2  # retried, not one-shot
+    assert client.post.call_count == 1
 
 
 @pytest.mark.asyncio

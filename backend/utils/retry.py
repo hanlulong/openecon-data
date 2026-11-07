@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Callable, TypeVar, Any
 from functools import wraps
 
@@ -18,6 +20,32 @@ T = TypeVar('T')
 class DataNotAvailableError(Exception):
     """Raised when requested data is not available from the provider."""
     pass
+
+
+def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:
+    """Parse Retry-After without exposing raw header text or overflowing dates.
+
+    Unrepresentably large integer delays saturate at the last UTC second of
+    year 9999. Missing or malformed headers retain the existing 60s default.
+    """
+    now = now or datetime.now(timezone.utc)
+    max_delay = max(0.0, 253402300799.0 - now.timestamp())
+    if not isinstance(value, str):
+        return 60.0
+    value = value.strip()
+    if value.isascii() and value.isdigit():
+        # Bound before integer conversion, including Python's digit-count limit.
+        digits = value.lstrip("0") or "0"
+        if len(digits) > 12:
+            return max_delay
+        return min(float(digits), max_delay)
+    try:
+        deadline = parsedate_to_datetime(value)
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        return min(max(0.0, deadline.timestamp() - now.timestamp()), max_delay)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 60.0
 
 
 async def retry_async(

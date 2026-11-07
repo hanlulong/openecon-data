@@ -1,10 +1,11 @@
 """Base provider class with common HTTP retry and error handling logic."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pybreaker
@@ -19,13 +20,12 @@ from tenacity import (
 from ..models import NormalizedData
 from ..services.http_pool import effective_timeout
 from ..services.rate_limiter import (
-    is_provider_circuit_open,
+    ProviderRateLimitWaitExceeded,
+    acquire_provider,
     record_provider_rate_limit_error,
-    record_provider_request,
     record_provider_success,
-    wait_for_provider,
 )
-from ..utils.retry import DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,14 @@ def _get_breaker(provider_name: str) -> pybreaker.CircuitBreaker:
 class _TransientHTTPError(Exception):
     """Internal marker for HTTP errors that should trigger tenacity retry."""
     pass
+
+
+class _RateLimitedHTTPError(Exception):
+    """An actual 429 counts as an upstream failure but is not retried."""
+
+
+class _RetryAdmissionRefused(Exception):
+    """Stop retries without replacing the last genuine upstream outcome."""
 
 
 class BaseProvider(ABC):
@@ -132,8 +140,9 @@ class BaseProvider(ABC):
     ) -> httpx.Response:
         """Get request with automatic retry on transient failures (powered by tenacity).
 
-        Retries on: HTTP 429 (rate limit), HTTP 5xx (server error),
+        Retries on: HTTP 5xx (server error),
         connection errors, timeouts.
+        HTTP 429 establishes a shared cooldown and fails promptly.
         Does NOT retry on: HTTP 404/403 (not found/forbidden), other client errors.
 
         Args:
@@ -143,7 +152,7 @@ class BaseProvider(ABC):
                 so a 4xx surfaces as DataNotAvailableError. Set False for call
                 sites that must INSPECT a non-2xx response to drive their own
                 recovery (e.g. BIS retries without params on non-200, Eurostat's
-                404/413 ladder) — they still get rate-limit gating, 429/5xx
+                404/413 ladder) — they still get rate-limit gating, 429 cooldown/5xx
                 transient retry, and circuit-breaker protection, just not the
                 terminal raise.
             **kwargs: Additional httpx parameters
@@ -154,93 +163,99 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
-        # Allow callers to override timeout via kwargs; fall back to self.timeout.
-        # Then apply the extended_timeout context override (if active) so that
-        # multi-provider parallel fetches get adequate time.
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
-
-        # Cycle 28: Enforce rate limits via shared rate_limiter service.
-        # Previously only OECD/StatsCan called wait_for_provider explicitly;
-        # FRED/CoinGecko/Eurostat/BIS/ExchangeRate silently violated their
-        # configured limits.  Now every provider automatically respects its
-        # rate_limiter config through this base method.
-        _provider_key = (self.provider_name or "").upper()
-        if _provider_key and is_provider_circuit_open(_provider_key):
-            raise DataNotAvailableError(
-                f"{self.provider_name} rate limit circuit OPEN — provider "
-                f"is cooling down after recent 429 errors. Try again shortly."
-            )
+        provider_key = (self.provider_name or "").upper()
+        attempts = 0
+        last_failure = None
+        retry_refused = False
+        cancellation = None
 
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
             retry=retry_if_exception_type((
-                httpx.ConnectError,
-                httpx.TimeoutException,
-                httpx.ReadTimeout,
-                _TransientHTTPError,
+                httpx.ConnectError, httpx.TimeoutException, _TransientHTTPError,
             )),
             before_sleep=before_sleep_log(logger, logging.WARNING),
             reraise=True,
         )
         async def _do_get():
-            # Pre-flight: wait for rate limiter clearance before each request
-            if _provider_key:
+            nonlocal attempts, last_failure, retry_refused
+            if attempts and provider_key:
                 try:
-                    await wait_for_provider(_provider_key)
-                    record_provider_request(_provider_key)
-                except Exception as _wait_err:
-                    logger.debug(
-                        "Rate limiter wait failed for %s: %s",
-                        _provider_key, _wait_err,
-                    )
-
-            response = await client.get(url, **kwargs, timeout=req_timeout)
-
-            if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 60))
-                self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
-                if _provider_key:
+                    await acquire_provider(provider_key)
+                except ProviderRateLimitWaitExceeded as exc:
+                    retry_refused = True
+                    raise _RetryAdmissionRefused() from exc
+            attempts += 1
+            try:
+                response = await client.get(url, **kwargs, timeout=req_timeout)
+                if response.status_code == 429:
+                    retry_after = parse_retry_after(response.headers.get("Retry-After"))
                     try:
-                        record_provider_rate_limit_error(_provider_key)
-                    except Exception:
-                        pass
-                raise _TransientHTTPError(f"Rate limited (429). Retry after {retry_after}s")
+                        self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
+                    except OverflowError:
+                        self.rate_limit_reset = datetime.max
+                    if provider_key:
+                        record_provider_rate_limit_error(provider_key, retry_after)
+                    raise _RateLimitedHTTPError("Rate limited (429); upstream cooldown is active")
+                if response.status_code >= 500:
+                    raise _TransientHTTPError(f"Server error ({response.status_code})")
+                if raise_on_status:
+                    response.raise_for_status()
+                if provider_key:
+                    record_provider_success(provider_key)
+                return response
+            except (httpx.ConnectError, httpx.TimeoutException, _TransientHTTPError) as exc:
+                last_failure = exc
+                raise
 
-            if response.status_code >= 500:
-                raise _TransientHTTPError(f"Server error ({response.status_code})")
-
-            if raise_on_status:
-                response.raise_for_status()
-            # Record success so rate_limiter can reset failure counters
-            if _provider_key:
-                try:
-                    record_provider_success(_provider_key)
-                except Exception:
-                    pass
-            return response
-
-        # Circuit breaker: fail fast if provider has been failing
         breaker = _get_breaker(self.provider_name)
         try:
-            return await breaker.call_async(_do_get)
+            # Avoid reserving quota for an already-open availability breaker.
+            # The calling() context remains authoritative if it opens while waiting.
+            if breaker.current_state == pybreaker.STATE_OPEN:
+                opened_at = breaker._state_storage.opened_at
+                if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(seconds=breaker.reset_timeout):
+                    raise pybreaker.CircuitBreakerError("Availability cooldown is active")
+            if provider_key:
+                # Zero-HTTP local refusals never enter pybreaker: excluded errors
+                # would incorrectly reset its counters or close half-open state.
+                await acquire_provider(provider_key)
+            # Keep one outcome for the entire retry operation, not each attempt.
+            with breaker.calling():
+                try:
+                    return await _do_get()
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    raise
+                except _RetryAdmissionRefused:
+                    assert last_failure is not None
+                    raise last_failure
+        except ProviderRateLimitWaitExceeded as exc:
+            raise DataNotAvailableError(str(exc)) from exc
         except pybreaker.CircuitBreakerError:
+            if cancellation is not None:
+                # pybreaker may wrap cancellation when it opens the circuit.
+                raise cancellation
             raise DataNotAvailableError(
                 f"{self.provider_name} circuit breaker OPEN — provider is down, skipping (resets in 60s)"
             )
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
             if status in (404, 403):
-                raise DataNotAvailableError(
-                    f"API returned {status}: {e.response.text[:200]}"
-                )
-            raise DataNotAvailableError(str(e))
-        except _TransientHTTPError as e:
-            raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {e}")
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout) as e:
-            raise DataNotAvailableError(f"Connection failed after {self.MAX_RETRIES} retries: {e}")
-        except Exception as e:
-            raise DataNotAvailableError(f"Request failed: {e}")
+                raise DataNotAvailableError(f"API returned {status}: {exc.response.text[:200]}") from exc
+            raise DataNotAvailableError(str(exc)) from exc
+        except _RateLimitedHTTPError as exc:
+            raise DataNotAvailableError(str(exc)) from exc
+        except _TransientHTTPError as exc:
+            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            raise DataNotAvailableError(f"Failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            raise DataNotAvailableError(f"Connection failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+        except Exception as exc:
+            raise DataNotAvailableError(f"Request failed: {exc}") from exc
 
     async def _post_with_retry(
         self,
@@ -271,82 +286,98 @@ class BaseProvider(ABC):
             DataNotAvailableError: If all retries fail
         """
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
-
-        _provider_key = (self.provider_name or "").upper()
-        if _provider_key and is_provider_circuit_open(_provider_key):
-            raise DataNotAvailableError(
-                f"{self.provider_name} rate limit circuit OPEN — provider "
-                f"is cooling down after recent 429 errors. Try again shortly."
-            )
+        provider_key = (self.provider_name or "").upper()
+        attempts = 0
+        last_failure = None
+        retry_refused = False
+        cancellation = None
 
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
             retry=retry_if_exception_type((
-                httpx.ConnectError,
-                httpx.TimeoutException,
-                httpx.ReadTimeout,
-                _TransientHTTPError,
+                httpx.ConnectError, httpx.TimeoutException, _TransientHTTPError,
             )),
             before_sleep=before_sleep_log(logger, logging.WARNING),
             reraise=True,
         )
         async def _do_post():
-            # Pre-flight: wait for rate limiter clearance before each request
-            if _provider_key:
+            nonlocal attempts, last_failure, retry_refused
+            if attempts and provider_key:
                 try:
-                    await wait_for_provider(_provider_key)
-                    record_provider_request(_provider_key)
-                except Exception as _wait_err:
-                    logger.debug(
-                        "Rate limiter wait failed for %s: %s",
-                        _provider_key, _wait_err,
-                    )
-
-            response = await client.post(url, **kwargs, timeout=req_timeout)
-
-            if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 60))
-                self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
-                if _provider_key:
+                    await acquire_provider(provider_key)
+                except ProviderRateLimitWaitExceeded as exc:
+                    retry_refused = True
+                    raise _RetryAdmissionRefused() from exc
+            attempts += 1
+            try:
+                response = await client.post(url, **kwargs, timeout=req_timeout)
+                if response.status_code == 429:
+                    retry_after = parse_retry_after(response.headers.get("Retry-After"))
                     try:
-                        record_provider_rate_limit_error(_provider_key)
-                    except Exception:
-                        pass
-                raise _TransientHTTPError(f"Rate limited (429). Retry after {retry_after}s")
-
-            if response.status_code >= 500:
-                raise _TransientHTTPError(f"Server error ({response.status_code})")
-
-            if raise_on_status:
-                response.raise_for_status()
-            if _provider_key:
-                try:
-                    record_provider_success(_provider_key)
-                except Exception:
-                    pass
-            return response
+                        self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
+                    except OverflowError:
+                        self.rate_limit_reset = datetime.max
+                    if provider_key:
+                        record_provider_rate_limit_error(provider_key, retry_after)
+                    raise _RateLimitedHTTPError("Rate limited (429); upstream cooldown is active")
+                if response.status_code >= 500:
+                    raise _TransientHTTPError(f"Server error ({response.status_code})")
+                if raise_on_status:
+                    response.raise_for_status()
+                if provider_key:
+                    record_provider_success(provider_key)
+                return response
+            except (httpx.ConnectError, httpx.TimeoutException, _TransientHTTPError) as exc:
+                last_failure = exc
+                raise
 
         breaker = _get_breaker(self.provider_name)
         try:
-            return await breaker.call_async(_do_post)
+            # Avoid reserving quota for an already-open availability breaker.
+            # The calling() context remains authoritative if it opens while waiting.
+            if breaker.current_state == pybreaker.STATE_OPEN:
+                opened_at = breaker._state_storage.opened_at
+                if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(seconds=breaker.reset_timeout):
+                    raise pybreaker.CircuitBreakerError("Availability cooldown is active")
+            if provider_key:
+                # Zero-HTTP local refusals never enter pybreaker: excluded errors
+                # would incorrectly reset its counters or close half-open state.
+                await acquire_provider(provider_key)
+            # Keep one outcome for the entire retry operation, not each attempt.
+            with breaker.calling():
+                try:
+                    return await _do_post()
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    raise
+                except _RetryAdmissionRefused:
+                    assert last_failure is not None
+                    raise last_failure
+        except ProviderRateLimitWaitExceeded as exc:
+            raise DataNotAvailableError(str(exc)) from exc
         except pybreaker.CircuitBreakerError:
+            if cancellation is not None:
+                # pybreaker may wrap cancellation when it opens the circuit.
+                raise cancellation
             raise DataNotAvailableError(
                 f"{self.provider_name} circuit breaker OPEN — provider is down, skipping (resets in 60s)"
             )
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
             if status in (404, 403):
-                raise DataNotAvailableError(
-                    f"API returned {status}: {e.response.text[:200]}"
-                )
-            raise DataNotAvailableError(str(e))
-        except _TransientHTTPError as e:
-            raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {e}")
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout) as e:
-            raise DataNotAvailableError(f"Connection failed after {self.MAX_RETRIES} retries: {e}")
-        except Exception as e:
-            raise DataNotAvailableError(f"Request failed: {e}")
+                raise DataNotAvailableError(f"API returned {status}: {exc.response.text[:200]}") from exc
+            raise DataNotAvailableError(str(exc)) from exc
+        except _RateLimitedHTTPError as exc:
+            raise DataNotAvailableError(str(exc)) from exc
+        except _TransientHTTPError as exc:
+            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            raise DataNotAvailableError(f"Failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            raise DataNotAvailableError(f"Connection failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+        except Exception as exc:
+            raise DataNotAvailableError(f"Request failed: {exc}") from exc
 
     @staticmethod
     def _normalize_country_code(country: str, mappings: Dict[str, str]) -> str:

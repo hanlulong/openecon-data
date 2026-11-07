@@ -11,15 +11,14 @@ from pathlib import Path
 from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
-from ..utils.retry import DataNotAvailableError, retry_async
+from ..utils.retry import DataNotAvailableError, parse_retry_after, retry_async
 from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 from ..services.dsd_cache import get_dimension_key_builder
 from ..services.cache import cache_service
 from ..services.rate_limiter import (
     ProviderRateLimitWaitExceeded,
-    wait_for_provider,
-    record_provider_request,
+    acquire_provider,
     record_provider_rate_limit_error,
     record_provider_success,
     is_provider_circuit_open,
@@ -519,6 +518,24 @@ class OECDProvider(BaseProvider):
             "obs_count": obs_count,
         }
 
+    async def _admitted_get(self, http_client, url: str, **kwargs):
+        """Admit each actual metadata/data attempt with its own 5s wait budget."""
+        try:
+            await acquire_provider("OECD", max_wait_seconds=5.0)
+        except ProviderRateLimitWaitExceeded as exc:
+            raise DataNotAvailableError(
+                "OECD is temporarily rate-limited right now. Please try again later or use a different provider."
+            ) from exc
+        response = await http_client.get(url, **kwargs)
+        if response.status_code == 429:
+            record_provider_rate_limit_error(
+                "OECD", parse_retry_after(response.headers.get("Retry-After"))
+            )
+            raise DataNotAvailableError("OECD is temporarily rate-limited; upstream cooldown is active")
+        response.raise_for_status()
+        record_provider_success("OECD")
+        return response
+
     async def _fetch_oecd_dataflow_structure_at_base(
         self,
         base_url: str,
@@ -541,8 +558,7 @@ class OECDProvider(BaseProvider):
             "Accept-Encoding": "gzip, deflate, br",
         }
         http_client = get_http_client()
-        response = await http_client.get(url, params=params, headers=headers, timeout=60.0)
-        response.raise_for_status()
+        response = await self._admitted_get(http_client, url, params=params, headers=headers, timeout=60.0)
         metadata = self._parse_oecd_dataflow_structure(response.json(), base_url.rstrip("/"))
         metadata["structureUrl"] = str(response.request.url)
         self._DATAFLOW_STRUCTURE_CACHE[cache_key] = metadata
@@ -1689,21 +1705,7 @@ class OECDProvider(BaseProvider):
             and params != provider_default_time_params
         )
 
-        # STEP 1: Wait for rate limiter before making request
-        # This prevents hitting rate limits in the first place by enforcing delays
-        try:
-            wait_delay = await wait_for_provider("OECD", max_wait_seconds=5.0)
-        except ProviderRateLimitWaitExceeded as exc:
-            record_provider_rate_limit_error("OECD")
-            raise DataNotAvailableError(
-                "OECD is temporarily rate-limited right now. Please try again later or use a different provider."
-            ) from exc
-        if wait_delay > 0:
-            logger.info(f"⏳ OECD rate limiter applied {wait_delay:.1f}s delay before request")
-
-        # Wrap HTTP call with enhanced retry logic for OECD rate limiting
-        # OECD has strict per-IP rate limits - we need aggressive retries
-        # Use shared HTTP client pool for better performance
+        # Retry transient failures; each attempt passes shared admission first.
         http_client = get_http_client()
 
         async def _request_oecd_data(
@@ -1711,31 +1713,15 @@ class OECDProvider(BaseProvider):
             request_params: Optional[Dict[str, str]] = None,
         ) -> Dict[str, Any]:
             async def fetch_with_retry():
-                try:
-                    active_params = request_params if request_params is not None else params
-                    # Use 50s timeout - OECD SDMX API can be very slow for complex queries
-                    # Research shows OECD has 60 requests/hour rate limit, so we need patience
-                    response = await http_client.get(
-                        request_url,
-                        params=active_params,
-                        headers={"Accept": "application/vnd.sdmx.data+json; version=2.0.0"},
-                        timeout=50.0,
-                    )
-
-                    # Check for rate limiting BEFORE raise_for_status
-                    if response.status_code == 429:
-                        # Record rate limit error for circuit breaker
-                        record_provider_rate_limit_error("OECD")
-                        response.raise_for_status()  # This will trigger retry logic
-
-                    response.raise_for_status()
-
-                    # Success! Record it to reset circuit breaker
-                    record_provider_success("OECD")
-                    return response.json()
-                finally:
-                    # Record this request for rate limiting purposes
-                    record_provider_request("OECD")
+                active_params = request_params if request_params is not None else params
+                response = await self._admitted_get(
+                    http_client,
+                    request_url,
+                    params=active_params,
+                    headers={"Accept": "application/vnd.sdmx.data+json; version=2.0.0"},
+                    timeout=50.0,
+                )
+                return response.json()
 
             return await retry_async(
                 fetch_with_retry,

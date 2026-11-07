@@ -3955,8 +3955,7 @@ class ProviderTests(unittest.TestCase):
             new=AsyncMock(return_value=None),
         ), patch("backend.providers.oecd.get_dimension_key_builder", return_value=key_builder), \
              patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="USA", start_year=2023, end_year=2023))
@@ -4020,8 +4019,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="Germany", start_year=2023, end_year=2023))
@@ -4080,8 +4078,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country=None, start_year=2019, end_year=2019))
@@ -4142,8 +4139,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="USA", start_year=2024, end_year=2024))
@@ -4242,8 +4238,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="USA"))
@@ -4359,8 +4354,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="USA"))
@@ -4445,8 +4439,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             with self.assertRaises(DataNotAvailableError) as raised:
@@ -4526,8 +4519,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             with self.assertRaises(DataNotAvailableError) as raised:
@@ -4584,8 +4576,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="CAN", start_year=2019, end_year=2019))
@@ -4678,8 +4669,7 @@ class ProviderTests(unittest.TestCase):
             "_get_oecd_dataflow_structure",
             new=AsyncMock(return_value=structure_metadata),
         ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
-             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
-             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.acquire_provider", new=AsyncMock(return_value=0)), \
              patch("backend.providers.oecd.record_provider_success"), \
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TiVA", country="Japan", start_year=2023, end_year=2023))
@@ -4700,7 +4690,7 @@ class ProviderTests(unittest.TestCase):
             "_resolve_indicator",
             new=AsyncMock(return_value=("OECD.SDD.TPS", "DSD_LFS@DF_IALFS_EMP_WAP_Q", "1.0")),
         ), patch(
-            "backend.providers.oecd.wait_for_provider",
+            "backend.providers.oecd.acquire_provider",
             new=AsyncMock(side_effect=ProviderRateLimitWaitExceeded("wait too long")),
         ):
             with self.assertRaisesRegex(DataNotAvailableError, "temporarily rate-limited"):
