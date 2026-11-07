@@ -59,7 +59,7 @@ from fastapi.security import HTTPBearer
 from .services.cache import cache_service
 from .services.redis_cache import get_redis_cache
 from .services.conversation import conversation_manager
-from .services.export import export_service
+from .services.export import content_disposition, export_service
 from .services.feedback import feedback_service
 from .services.anon_token import issue_anon_token, verify_anon_token
 from .services.grok import CodeGenerationError
@@ -2970,12 +2970,9 @@ async def export_endpoint(request: ExportRequest) -> Response:
         media_type = "application/json"
 
     filename = request.filename or export_service.generate_filename(request.data, request.format)
-    # Sanitize filename to prevent path traversal and header injection
-    import re as _re
-    filename = _re.sub(r'[^\w\s\-.]', '', filename.split('/')[-1].split('\\')[-1])[:200]
-    if not filename:
-        filename = "export"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    # Path traversal, header injection and non-latin-1 names (CJK metadata,
+    # U+2028/U+2029) are all handled by one helper: ASCII fallback + RFC 5987.
+    headers = {"Content-Disposition": content_disposition(filename, request.format)}
 
     return Response(content=content, media_type=media_type, headers=headers)
 
