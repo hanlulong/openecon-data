@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>为你的 AI 智能体提供准确的经济数据。</strong><br/>
-  来自 FRED、World Bank、IMF、Eurostat 等 10 个来源的 33 万条指标 —— 一条 MCP 命令即可接入。
+  来自 FRED、World Bank、IMF、Eurostat 等 11 个来源的 33 万条指标 —— 一条 MCP 命令即可接入。
 </p>
 
 <p align="center">
@@ -151,12 +151,15 @@ OPENROUTER_API_KEY=sk-or-...                  # 必填（LLM 解析）—— htt
 JWT_SECRET=...                                # 必填 —— 用 openssl rand -hex 32 生成
 ```
 
-启动前后端：
+在仓库根目录、激活后端虚拟环境后启动前后端（`npm run dev` 会调用 PATH 中的 `uvicorn`）：
 
 ```bash
-python3 scripts/restart_dev.py
+source backend/.venv/bin/activate
+npm run dev
 # 后端：http://localhost:3001  |  前端：http://localhost:5173
 ```
+
+如需重启，按 Ctrl+C 后重新运行 `npm run dev`。
 
 然后发起第一个查询 —— 自然语言输入，带来源的数据输出：
 
@@ -175,7 +178,7 @@ curl -X POST http://localhost:3001/api/query \
       "unit": "Percent",
       "sourceUrl": "https://fred.stlouisfed.org/series/UNRATE"  // 每条结果都链接到来源
     },
-    "data": [{ "date": "2023-01", "value": 3.4 }, /* ... */]
+    "data": [{ "date": "2023-01-01", "value": 3.4 }, /* ... */]
   }]
 }
 ```
@@ -190,7 +193,7 @@ source backend/.venv/bin/activate            # Windows: backend\.venv\Scripts\ac
 pip install --upgrade pip
 pip install -r backend/requirements.txt
 cp .env.example .env                         # 然后设置 OPENROUTER_API_KEY 与 JWT_SECRET
-python3 scripts/restart_dev.py
+npm run dev                                  # 后端 :3001，前端 :5173
 ```
 </details>
 
@@ -293,7 +296,7 @@ curl -X POST https://data.openecon.ai/api/query \
 | **OECD** | 经合组织成员国统计 | 大量 | 无需 |
 | **ExchangeRate-API** | 160+ 货币对，实时与历史 | 实时与历史 | 免费 |
 | **CoinGecko** | 加密货币价格与市场数据 | 10,000+ 币种 | 免费 |
-| **ChinaMacro** | 最新中国宏观数据（PMI、M2、社融、CPI/PPI、10年期国债收益率） | 14 个精选序列 | 无需 |
+| **ChinaMacro** | 最新中国宏观数据（PMI、M2、社融、CPI/PPI、10年期国债收益率） | 23 个精选序列 | 无需 |
 
 ## 适合谁用
 

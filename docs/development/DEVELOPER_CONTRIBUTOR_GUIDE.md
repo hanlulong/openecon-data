@@ -19,7 +19,7 @@ If you only want to use the product, start with:
 ## Prerequisites
 
 - Node.js 18+ and npm 9+
-- Python 3.9+
+- Python 3.10+
 - OpenRouter API key (required)
 - FRED and Comtrade API keys (recommended)
 
@@ -151,7 +151,6 @@ Detailed references:
 ## Deployment
 
 Primary references:
-- [Deployment Summary](../DEPLOYMENT_SUMMARY.md)
 - [Apache Pro Mode Setup](../deployment/apache-promode-setup.md)
 
 Production checklist:

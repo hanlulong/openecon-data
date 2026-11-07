@@ -1,6 +1,6 @@
 # OpenEcon.ai — AI Economic Data Platform
 
-> Free, AI-powered natural-language search over 330,000+ economic indicators from FRED, World Bank, IMF, Eurostat, Statistics Canada, BIS, UN Comtrade, OECD, ExchangeRate-API, and CoinGecko. Ask a question in plain English and get instant charts plus CSV/JSON exports with full source provenance.
+> Free, AI-powered natural-language search over 330,000+ economic indicators from FRED, World Bank, IMF, Eurostat, Statistics Canada, BIS, UN Comtrade, OECD, ExchangeRate-API, CoinGecko, and ChinaMacro. Ask a question in plain English and get instant charts plus CSV/JSON exports with full source provenance.
 
 OpenEcon.ai routes each query to the right authoritative provider automatically, resolves the correct indicator, fetches and normalizes the series, and returns a chart, a narrative summary, and the exact source URL. No registration is required for basic queries.
 
@@ -8,7 +8,7 @@ OpenEcon.ai routes each query to the right authoritative provider automatically,
 
 - [Web chat](https://data.openecon.ai/chat): Type a natural-language question and get charts + exportable data.
 - [MCP server](https://data.openecon.ai/mcp): Model Context Protocol endpoint over Server-Sent Events (SSE), exposing the `query_data` operation. Install for Claude: `claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user`
-- [GitHub / pip](https://github.com/hanlulong/openecon-data): Source, installation, and API details.
+- [GitHub](https://github.com/hanlulong/openecon-data): Source, installation, and API details.
 
 ## Example queries
 
@@ -29,6 +29,7 @@ OpenEcon.ai routes each query to the right authoritative provider automatically,
 - BIS (Bank for International Settlements) — central bank and financial stability data
 - ExchangeRate-API — currency exchange rates
 - CoinGecko — cryptocurrency prices and market data
+- ChinaMacro — fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield)
 
 ## Part of OpenEcon.ai
 
