@@ -5526,9 +5526,23 @@ class QueryService:
                         if conversation_context is None
                         else None
                     )
+                    # A cached intent that the exact-title builder itself
+                    # produced for this very query text already IS the
+                    # builder's outcome (in-process cache, same code, same
+                    # catalog snapshot), so re-running it could only return
+                    # the same provider/indicator and the refresh below would
+                    # be a no-op. Any other cached intent (LLM parse, or a
+                    # case-variant of the text sharing the case-insensitive
+                    # cache key) still gets the deterministic refresh check.
+                    _cached_is_title_shortcut = bool(
+                        (parse_result.intent.parameters or {}).get("__exact_indicator_title_match")
+                        and parse_result.intent.originalQuery == query
+                    )
                     exact_title_intent = (
                         await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
-                        if conversation_context is None and exact_code_intent is None
+                        if conversation_context is None
+                        and exact_code_intent is None
+                        and not _cached_is_title_shortcut
                         else None
                     )
                     shortcut_intent = exact_code_intent or exact_title_intent
