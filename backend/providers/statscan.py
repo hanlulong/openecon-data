@@ -2183,7 +2183,7 @@ class StatsCanProvider(BaseProvider):
             scalar_code, "billions", indicator_name
         )
         for point in vector_data:
-            converted_value, _point_unit = self._normalize_units(
+            converted_value, _ = self._normalize_units(
                 point["value"],
                 scalar_code,
                 to_unit="billions",
@@ -2278,7 +2278,7 @@ class StatsCanProvider(BaseProvider):
             # One label for the whole series (see _normalized_unit_label).
             unit = self._normalized_unit_label(scalar_code, target_unit, indicator_name)
             for point in vector_data:
-                converted_value, _point_unit = self._normalize_units(
+                converted_value, _ = self._normalize_units(
                     point["value"],
                     scalar_code,
                     to_unit=target_unit,
