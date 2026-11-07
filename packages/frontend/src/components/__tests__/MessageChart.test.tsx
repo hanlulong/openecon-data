@@ -693,6 +693,23 @@ describe('MessageChart', () => {
       expect(header()).toContain('Nov 2, 2026 – Nov 5, 2026');
     });
 
+    it('keeps quarter-label dates (YYYY-Qn) at quarter precision', () => {
+      render(
+        <MessageChart
+          data={withData('quarterly', [
+            { date: '2024-Q2', value: 2 },
+            { date: '2023-Q1', value: 1 },
+            { date: '2024-Q4', value: 4 },
+          ])}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).toContain('2023-Q1 – 2024-Q4');
+      expect(header()).not.toContain('2023 – 2024');
+    });
+
     it('omits the range for categorical (currency-code) rows', () => {
       render(
         <MessageChart

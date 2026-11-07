@@ -305,6 +305,14 @@ function computeAxisGroups(data: NormalizedData[], labels: string[]): AxisGroup[
   return groups
 }
 
+// A date that is already a quarter label ("2024-Q1", "2024Q1"), normalized to
+// "YYYY-Qn"; null for any other shape. Structural date-shape parsing only.
+const QUARTER_LABEL = /^(\d{4})-?Q([1-4])$/i
+function quarterLabel(dateStr: string): string | null {
+  const match = QUARTER_LABEL.exec(dateStr)
+  return match ? `${match[1]}-Q${match[2]}` : null
+}
+
 function formatXAxisTick(dateStr: string, frequency?: string): string {
   if (!frequency) return dateStr
 
@@ -317,6 +325,8 @@ function formatXAxisTick(dateStr: string, frequency?: string): string {
 
   // Quarterly: show year-quarter (e.g., "2020-Q1")
   if (lowerFreq === 'quarterly' || lowerFreq === 'quarter') {
+    const label = quarterLabel(dateStr)
+    if (label) return label
     const year = dateStr.substring(0, 4)
     const month = parseInt(dateStr.substring(5, 7), 10)
     const quarter = Math.ceil(month / 3)
@@ -345,6 +355,8 @@ const ISO_DATE_PREFIX = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/
 // Parsed from the string, never via Date(), so no timezone shift can move
 // "2021-11-01" into October.
 function formatRangeEndpoint(dateStr: string, frequency?: string): string {
+  const quarter = quarterLabel(dateStr)
+  if (quarter) return quarter
   const match = ISO_DATE_PREFIX.exec(dateStr)
   if (!match) return dateStr
   const [, year, month, day] = match
