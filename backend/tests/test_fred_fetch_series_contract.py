@@ -112,3 +112,32 @@ def test_default_window_with_no_rows_is_broadened(monkeypatch, extra):
     assert len(observation_calls) == 2
     assert "observation_start" not in observation_calls[1]
     assert [(p.date, p.value) for p in result.data] == [("1950-01-01", 6.5)]
+
+
+def _cpi_rows(query):
+    return [{"date": "2026-08-01", "value": "2.9"}, {"date": "2026-09-01", "value": "3.0"}]
+
+
+@pytest.mark.parametrize(
+    ("series_id", "data_type", "units"),
+    [
+        ("CPIAUCSL:pc1", "Percent Change", "pc1"),
+        ("CPIAUCSL:pch", "Percent Change", "pch"),
+        ("CPIAUCSL:ch1", "Change", "ch1"),
+        ("CPIAUCSL:lin", "Index", "lin"),
+        ("CPIAUCSL", "Index", None),
+    ],
+)
+def test_transformation_sets_data_type_and_api_url(monkeypatch, series_id, data_type, units):
+    result, observation_calls = _fetch(
+        monkeypatch,
+        {"seriesId": series_id, "indicator": "CPI", "__original_query": "US CPI"},
+        _cpi_rows,
+    )
+    metadata = result.metadata
+    assert metadata.dataType == data_type
+    assert observation_calls[0].get("units") == units
+    api_query = parse_qs(urlparse(metadata.apiUrl).query)
+    assert api_query.get("units") == ([units] if units else None)
+    assert api_query["api_key"] == ["***"]
+    assert KEY not in metadata.apiUrl

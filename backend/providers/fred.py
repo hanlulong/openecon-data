@@ -16,6 +16,20 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
+# FRED `units` transformation codes (series/observations API) -> the data type
+# the transformed values actually have. "lin" is FRED's untransformed level,
+# so it (and any unknown code) keeps the type derived from the series title.
+_FRED_TRANSFORM_DATA_TYPES = {
+    "chg": "Change",
+    "ch1": "Change",
+    "pch": "Percent Change",
+    "pc1": "Percent Change",
+    "pca": "Percent Change",
+    "cch": "Percent Change",
+    "cca": "Percent Change",
+    "log": "Level",
+}
+
 
 def _parse_iso_date(value: Any) -> Optional[date]:
     if not value:
@@ -650,6 +664,10 @@ class FREDProvider(BaseProvider):
             api_url_params["observation_start"] = effective_params["startDate"]
         if effective_params.get("endDate"):
             api_url_params["observation_end"] = effective_params["endDate"]
+        if transformation:
+            # Same transformation the observations call used, so the public
+            # URL reproduces the served values.
+            api_url_params["units"] = transformation
 
         query_string = "&".join(f"{key}={value}" for key, value in api_url_params.items())
         api_url = f"{self.base_url}/series/observations?{query_string}&api_key=***"
@@ -696,6 +714,11 @@ class FREDProvider(BaseProvider):
             data_type = "Rate"
         else:
             data_type = "Level"
+        # A units transformation changes what the values are (CPIAUCSL:pc1 is a
+        # percent change, not an index), whatever the series title says.
+        data_type = _FRED_TRANSFORM_DATA_TYPES.get(
+            str(transformation or "").strip().lower(), data_type
+        )
 
         # Determine price type (real vs nominal)
         price_type = None
