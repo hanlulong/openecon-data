@@ -40,6 +40,8 @@ RUNTIME_FILES = [
     _REPO_ROOT / "backend/services/query_helpers.py",
     _REPO_ROOT / "backend/services/provider_fallback.py",
     _REPO_ROOT / "backend/services/query_pipeline.py",
+    # Provider identity registry: alias tiers must stay identity data.
+    _REPO_ROOT / "backend/utils/providers.py",
 ]
 
 FORBIDDEN_RUNTIME_MARKERS = [

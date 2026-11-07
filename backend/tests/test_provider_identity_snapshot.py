@@ -161,7 +161,31 @@ GOLDEN_DETECTION = {
 
 # Intended behavior changes introduced by the ProviderSpec registry.  Every
 # entry here is a deliberate fix; any other drift from GOLDEN_DETECTION fails.
-_INTENDED_DETECTION_CHANGES: dict = {}
+_INTENDED_DETECTION_CHANGES: dict = {
+    # ChinaMacro registered (directive tier: chinamacro / china macro /
+    # china-macro; bare tier: the coined token 'chinamacro' only).
+    'China PMI from ChinaMacro': ('ChinaMacro', 'from chinamacro'),
+    'China M2 using china macro': ('ChinaMacro', 'using china macro'),
+    'PMI via china-macro': ('ChinaMacro', 'via china-macro'),
+    'China CPI via ChinaMacro': ('ChinaMacro', 'via chinamacro'),
+    'China PMI according to chinamacro': ('ChinaMacro', 'according to chinamacro'),
+    'PMI from China Macro': ('ChinaMacro', 'from china macro'),
+    'chinamacro PMI': ('ChinaMacro', 'chinamacro'),
+    'ChinaMacro China PMI': ('ChinaMacro', 'chinamacro'),
+    'China PMI (ChinaMacro)': ('ChinaMacro', 'chinamacro'),
+    '中国PMI 来自ChinaMacro': ('ChinaMacro', 'chinamacro'),
+    '从chinamacro获取中国PMI': ('ChinaMacro', 'chinamacro'),
+    # Directive aliases normalize_provider_name already knew.
+    'Canada CPI from statcan': ('StatsCan', 'from statcan'),
+    'Canada CPI using statcan': ('StatsCan', 'using statcan'),
+    'rate from exchangerate-api': ('ExchangeRate', 'from exchangerate-api'),
+    'data from exchangerate-api': ('ExchangeRate', 'from exchangerate-api'),
+    # Optional article in the directive grammar (structural).
+    'credit from the BIS': ('BIS', 'from the bis'),
+    'GDP from the OECD': ('OECD', 'from the oecd'),
+    'inflation from the eurostat': ('Eurostat', 'from the eurostat'),
+    'GDP from the world bank': ('WorldBank', 'from the world bank'),  # same provider
+}
 
 
 @pytest.mark.parametrize("query", list(GOLDEN_DETECTION))
@@ -224,7 +248,16 @@ GOLDEN_NORMALIZE = {
     'exchange rate-api': 'EXCHANGE RATE-API',
 }
 
-_INTENDED_NORMALIZE_CHANGES: dict = {}
+_INTENDED_NORMALIZE_CHANGES: dict = {
+    # Every explicit-request alias is now also a normalize alias (invariant:
+    # explicit tiers ⊆ normalize tier).
+    'stlouisfed': 'FRED',
+    'st. louis fed': 'FRED',
+    'united nations comtrade': 'COMTRADE',
+    'the imf': 'IMF',
+    'china-macro': 'CHINAMACRO',
+    'exchange rate-api': 'EXCHANGERATE',
+}
 
 
 @pytest.mark.parametrize("label", list(GOLDEN_NORMALIZE))
@@ -270,7 +303,12 @@ GOLDEN_DB_NORMALIZE = {
     'un': 'un',
 }
 
-_INTENDED_DB_NORMALIZE_CHANGES: dict = {}
+_INTENDED_DB_NORMALIZE_CHANGES: dict = {
+    # Previously passed through unchanged and matched no indicators.db rows;
+    # the derived lookup maps every registered provider label to its db name.
+    'UN Comtrade': 'Comtrade',
+    'un': 'Comtrade',
+}
 
 
 @pytest.mark.parametrize("label", list(GOLDEN_DB_NORMALIZE))

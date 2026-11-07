@@ -14,7 +14,7 @@ from ..models import ClarificationOption, NormalizedData, ParsedIntent, QueryRes
 from ..routing.country_resolver import CountryResolver
 from ..services.query_complexity import QueryComplexityAnalyzer
 from ..services.provider_fallback import normalize_country_to_iso2
-from ..utils.providers import normalize_provider_name
+from ..utils.providers import NON_PROVIDER_SOURCES, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 
 if TYPE_CHECKING:
@@ -609,18 +609,28 @@ def add_provider_transparency(
     if not explicit_provider:
         return result
 
-    actual_sources = set()
+    # Served labels normalize through the provider registry, which also
+    # strips attribution suffixes ("ChinaMacro (NBS via EastMoney
+    # datacenter)", "FRED (Federal Reserve)") — a private label map here
+    # drifted and produced false "did not have this data" notes.
+    # Non-provider sentinels (the catalog "not available" stub) and missing
+    # labels are not a substitution and never produce a note.
+    actual_sources: List[str] = []
+    actual_norm = set()
     for series in result.data:
-        if series.metadata and series.metadata.source:
-            actual_sources.add(series.metadata.source)
+        source = series.metadata.source if series.metadata else None
+        if not source:
+            continue
+        source_norm = normalize_provider_name(source)
+        if source_norm in NON_PROVIDER_SOURCES:
+            continue
+        actual_norm.add(source_norm)
+        if source not in actual_sources:
+            actual_sources.append(source)
+    if not actual_sources:
+        return result
 
     explicit_norm = normalize_provider_name(explicit_provider)
-    source_map = {
-        "FRED": "FRED", "World Bank": "WORLDBANK", "Statistics Canada": "STATSCAN",
-        "IMF": "IMF", "BIS": "BIS", "Eurostat": "EUROSTAT", "OECD": "OECD",
-        "UN Comtrade": "COMTRADE", "CoinGecko": "COINGECKO", "ExchangeRate-API": "EXCHANGERATE",
-    }
-    actual_norm = {source_map.get(s, s.upper()) for s in actual_sources}
 
     if explicit_norm not in actual_norm:
         actual_display = ", ".join(actual_sources)

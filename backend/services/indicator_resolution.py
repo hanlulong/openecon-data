@@ -1590,18 +1590,12 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         return []
 
     provider_key = _normalize_provider_name(provider_name)
-    provider_aliases = {
-        "WORLDBANK": ["world bank", "worldbank"],
-        "STATSCAN": ["statistics canada", "statscan"],
-        "COINGECKO": ["coin gecko", "coingecko"],
-        "EXCHANGERATE": ["exchange rate", "exchange rate-api", "exchangerate", "exchangerate-api"],
-        "COMTRADE": ["comtrade", "un comtrade"],
-        "OECD": ["oecd"],
-        "EUROSTAT": ["eurostat"],
-        "IMF": ["imf"],
-        "FRED": ["fred"],
-        "BIS": ["bis"],
-    }.get(provider_key, [str(provider_name or "").strip().lower()])
+    # Provider-name forms from the ProviderSpec registry (identity only).
+    from ..utils.providers import provider_title_aliases
+
+    provider_aliases = provider_title_aliases(provider_key) or [
+        str(provider_name or "").strip().lower()
+    ]
 
     search_inputs: list[str] = []
     queue = [query_text]

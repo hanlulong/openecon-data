@@ -57,6 +57,7 @@ from ..services.provider_strategy import (
 )
 from ..services.query_parsing import extract_indicator_text_from_refined_query
 from ..utils.option_supportability import option_supportability_reason
+from ..utils.providers import PROVIDER_SPECS, provider_option_labels
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -987,13 +988,9 @@ def build_no_reliable_indicator_match_response(
 # Indicator option collection
 # ====================================================================
 
-_PROVIDER_OPTION_LABELS = {
-    "WORLDBANK": "WorldBank",
-    "EUROSTAT": "Eurostat",
-    "STATSCAN": "StatsCan",
-    "COMTRADE": "Comtrade",
-    "CHINAMACRO": "ChinaMacro",
-}
+# Canonical provider -> bracket label ("[WorldBank] ..."), derived from the
+# ProviderSpec registry; parse_indicator_option normalizes it back.
+_PROVIDER_OPTION_LABELS = provider_option_labels()
 
 
 def collect_indicator_choice_options(
@@ -1543,21 +1540,13 @@ def _handle_data_sources_query(
     tracker: Optional[ProcessingTracker] = None,
 ) -> QueryResponse:
     """Answer questions about available data sources / providers."""
-    providers = [
-        ("FRED", "US economic data — 800K+ time series from the Federal Reserve Bank of St. Louis"),
-        ("World Bank", "Global development indicators — 16,000+ series covering 200+ countries"),
-        ("Statistics Canada", "Canadian economic and social data — 40,000+ tables"),
-        ("Eurostat", "European Union statistics — demographics, trade, economy across EU members"),
-        ("IMF", "International financial data — balance of payments, exchange rates, fiscal indicators"),
-        ("BIS", "Central bank statistics — credit, debt securities, property prices from the Bank for International Settlements"),
-        ("OECD", "Cross-country economic data for OECD member nations"),
-        ("UN Comtrade", "International trade data — bilateral import/export flows by commodity"),
-        ("CoinGecko", "Cryptocurrency market data — prices, volumes, market caps"),
-        ("ExchangeRate-API", "Foreign exchange rates — 160+ currencies with daily updates"),
-    ]
+    # Derived from the ProviderSpec registry so the count and list cannot
+    # drift from the providers the system actually serves.
+    providers = [(spec.display_name, spec.description) for spec in PROVIDER_SPECS]
 
     lines = [
-        "I have access to **10 data sources** covering economic, financial, and trade data worldwide:",
+        f"I have access to **{len(providers)} data sources** covering economic, "
+        "financial, and trade data worldwide:",
         "",
     ]
     for name, desc in providers:

@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 
 from .country_resolver import CountryResolver
+from ..utils.providers import PROVIDER_SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -71,34 +72,29 @@ _CURRENCY_PAIR_RE = re.compile(
 # Inline helpers (lightweight, structural checks only)
 # ---------------------------------------------------------------------------
 
-# Explicit provider keywords — detects "from FRED", "using IMF", etc.
-_EXPLICIT_PROVIDER_KEYWORDS: Dict[str, List[str]] = {
-    "OECD": ["from oecd", "using oecd", "via oecd", "according to oecd", "oecd data"],
-    "FRED": ["fred", "from fred", "using fred", "via fred", "federal reserve", "st. louis fed", "stlouisfed", "the fed"],
-    "WorldBank": ["world bank", "worldbank", "from world bank", "using world bank", "wb data", "world bank data"],
-    "Comtrade": ["comtrade", "un comtrade", "from comtrade", "using comtrade", "united nations comtrade"],
-    "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan", "using statscan"],
-    "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "according to the imf", "imf data"],
-    "BIS": ["from bis", "using bis", "bank for international settlements", "bis data"],
-    "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics", "eurostat data"],
-    "ExchangeRate": ["exchangerate", "exchange rate api", "from exchangerate"],
-    "CoinGecko": ["coingecko", "coin gecko", "from coingecko", "using coingecko", "crypto prices"],
+# Explicit provider detection — "from FRED", "using IMF", a bare coined
+# provider name, ...  The alias TIERS come from the ProviderSpec registry
+# (backend/utils/providers.py); only the directive GRAMMAR lives here.
+# Structural: identity matching against a closed set of provider names.
+
+# Quarantined legacy topic cues.  These describe what a query is ABOUT, not
+# which provider it names, so they are NOT registry identity aliases.  Kept
+# only to preserve existing routing; consulted in the same position as the
+# owning provider's bare aliases.  Do not add to this table — remove entries
+# once LLM routing is verified to handle these phrasings.
+_LEGACY_TOPIC_CUES: Dict[str, Tuple[str, ...]] = {
+    "FRED": ("the fed",),
+    "Eurostat": ("eu statistics", "european statistics"),
+    "CoinGecko": ("crypto prices",),
 }
 
-_EXPLICIT_PROVIDER_DIRECTIVE_ALIASES: Dict[str, List[str]] = {
-    "OECD": ["oecd"],
-    "FRED": ["fred", "federal reserve", "st. louis fed", "stlouisfed"],
-    "WorldBank": ["world bank", "worldbank"],
-    "Comtrade": ["comtrade", "un comtrade", "united nations comtrade"],
-    "StatsCan": ["statscan", "statistics canada", "stats canada"],
-    "IMF": ["imf", "the imf", "international monetary fund"],
-    "BIS": ["bis", "bank for international settlements"],
-    "Eurostat": ["eurostat"],
-    "ExchangeRate": ["exchangerate", "exchange rate api", "exchange rate-api"],
-    "CoinGecko": ["coingecko", "coin gecko"],
-}
+# Source-directive grammar.  An optional article ("from the BIS") is
+# structural, not an alias.
+_DIRECTIVE_PREFIX = (
+    r"(?<![a-z0-9_-])(?:from|using|use|via|according\s+to)\s+(?:the\s+)?"
+)
 
-_START_OF_QUERY_PROVIDERS = ["OECD", "IMF", "BIS", "Eurostat"]
+_START_OF_QUERY_PROVIDERS = [spec.name for spec in PROVIDER_SPECS if spec.start_of_query]
 _START_OF_QUERY_EXCLUSIONS = ["countries", "country", "members", "member", "nations", "nation", "average"]
 
 
@@ -108,21 +104,31 @@ def _provider_alias_pattern(alias: str) -> str:
     return rf"(?<![a-z0-9_-]){re.escape(alias)}(?![a-z0-9_-])"
 
 
+# Precompiled in registry order x alias order (tie-break order is behavior).
+_DIRECTIVE_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
+    (
+        spec.name,
+        re.compile(rf"(?P<keyword>{_DIRECTIVE_PREFIX}{_provider_alias_pattern(alias)})"),
+    )
+    for spec in PROVIDER_SPECS
+    for alias in spec.directive_aliases
+]
+
+_BARE_PATTERNS: List[Tuple[str, str, "re.Pattern[str]"]] = [
+    (spec.name, keyword, re.compile(_provider_alias_pattern(keyword)))
+    for spec in PROVIDER_SPECS
+    for keyword in (*spec.bare_aliases, *_LEGACY_TOPIC_CUES.get(spec.name, ()))
+]
+
+
 def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
     """Return (provider, matched_keyword) if user explicitly names a provider, else None."""
     query_lower = query.lower()
 
     directive_matches: List[Tuple[int, str, str]] = []
-    for provider, aliases in _EXPLICIT_PROVIDER_DIRECTIVE_ALIASES.items():
-        for alias in aliases:
-            alias_pattern = _provider_alias_pattern(alias)
-            directive_pattern = (
-                rf"(?<![a-z0-9_-])"
-                rf"(?P<keyword>(?:from|using|use|via)\s+{alias_pattern}|"
-                rf"according\s+to\s+{alias_pattern})"
-            )
-            for match in re.finditer(directive_pattern, query_lower):
-                directive_matches.append((match.start(), provider, match.group("keyword")))
+    for provider, pattern in _DIRECTIVE_PATTERNS:
+        for match in pattern.finditer(query_lower):
+            directive_matches.append((match.start(), provider, match.group("keyword")))
     if directive_matches:
         # A syntactic provider directive ("from CoinGecko") is stronger than a
         # bare provider word elsewhere in the title ("FRED Energy").  When a
@@ -137,15 +143,14 @@ def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
             if not any(term in query_lower[:30] for term in _START_OF_QUERY_EXCLUSIONS):
                 return provider, f"{provider} (at start)"
 
-    for provider, keywords in _EXPLICIT_PROVIDER_KEYWORDS.items():
-        for keyword in keywords:
-            # Match provider aliases as standalone text, not as arbitrary
-            # substrings inside provider-native codes/slugs.  For example,
-            # CoinGecko has a valid asset id `fredenergy`; the bare FRED alias
-            # must not steal `fredenergy from CoinGecko` before the explicit
-            # CoinGecko suffix is seen.
-            if re.search(_provider_alias_pattern(keyword), query_lower):
-                return provider, keyword
+    for provider, keyword, pattern in _BARE_PATTERNS:
+        # Match provider aliases as standalone text, not as arbitrary
+        # substrings inside provider-native codes/slugs.  For example,
+        # CoinGecko has a valid asset id `fredenergy`; the bare FRED alias
+        # must not steal `fredenergy from CoinGecko` before the explicit
+        # CoinGecko suffix is seen.
+        if pattern.search(query_lower):
+            return provider, keyword
 
     return None
 

@@ -38,7 +38,7 @@ from ..services.provider_strategy import (
 )
 from ..services.user_messages import get_message as _localized_message
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
-from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
+from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_progress_labels
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
@@ -3301,17 +3301,9 @@ async def fetch_data(
             return retry_result
 
     if tracker:
-        provider_names = {
-            "FRED": "Federal Reserve",
-            "WORLDBANK": "World Bank",
-            "COMTRADE": "UN Comtrade",
-            "STATSCAN": "Statistics Canada",
-            "BIS": "Bank for International Settlements",
-            "EUROSTAT": "Eurostat",
-            "OECD": "OECD",
-            "COINGECKO": "CoinGecko",
-        }
-        provider_display = provider_names.get(execution_plan.provider, execution_plan.provider)
+        provider_display = provider_progress_labels().get(
+            execution_plan.provider, execution_plan.provider
+        )
         fetch_message = f"Retrieving data from {provider_display}..."
 
         with tracker.track(

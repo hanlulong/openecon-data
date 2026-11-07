@@ -639,27 +639,11 @@ class IndicatorLookup:
 
     def __init__(self, db: Optional[IndicatorDatabase] = None):
         self.db = db or get_indicator_database()
-        # Canonical provider names as stored in indicators.db
-        self._provider_aliases = {
-            "FRED": "FRED",
-            "WORLDBANK": "WorldBank",
-            "WORLD BANK": "WorldBank",
-            "IMF": "IMF",
-            "EUROSTAT": "Eurostat",
-            "OECD": "OECD",
-            "STATSCAN": "StatsCan",
-            "STATISTICSCANADA": "StatsCan",
-            "STATISTICS CANADA": "StatsCan",
-            "BIS": "BIS",
-            "COMTRADE": "Comtrade",
-            "COINGECKO": "CoinGecko",
-            "COIN GECKO": "CoinGecko",
-            "EXCHANGERATE": "ExchangeRate",
-            "EXCHANGE RATE": "ExchangeRate",
-            "EXCHANGE-RATE": "ExchangeRate",
-            "CHINAMACRO": "ChinaMacro",
-            "CHINA MACRO": "ChinaMacro",
-        }
+        # Compact provider label -> canonical provider name as stored in
+        # indicators.db, derived from the ProviderSpec registry.
+        from ..utils.providers import db_provider_lookup
+
+        self._provider_aliases = db_provider_lookup()
 
     def _normalize_provider(self, provider: Optional[str]) -> Optional[str]:
         """Normalize provider aliases to canonical database provider names."""
