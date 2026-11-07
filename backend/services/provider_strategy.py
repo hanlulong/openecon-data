@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..utils.geographies import AGGREGATE_GEO_FAMILY_REGIONS, aggregate_geo_family
 from ..utils.providers import normalize_provider_name
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,11 @@ GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGE
 # or individual members, and do not authorize averaging member observations.
 PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
     "EUROSTAT": {
-        "EUROZONE": "EA20",
+        # The bare family code is a LOGICAL token: EurostatProvider resolves it
+        # against each dataset's own geo codelist at fetch time (newest fixed
+        # composition the dataset publishes, e.g. EA21 since 2026), so a
+        # membership change never needs an edit here.
+        "EUROZONE": "EA",
         "EU": "EU27_2020",
     },
     "WORLDBANK": {
@@ -106,6 +111,15 @@ PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
         "EUROZONE": "XM",
     },
 }
+
+# Providers that resolve an aggregate's COMPOSITION code (EA21, EU27_2020,
+# EU28, ...) against each dataset's own published geo codelist at fetch time
+# and disclose any substitution. A specific composition code addressed to them
+# is passed through verbatim, so an explicit "EA19"/"EU28" request (or a code
+# carried from an earlier turn) is honoured where the dataset publishes it,
+# instead of being rewritten to the provider's logical first-attempt code.
+# Capability declaration consulted generically, like GEOGRAPHY_ENCODED_PROVIDERS.
+AGGREGATE_COMPOSITION_RESOLVING_PROVIDERS = frozenset({"EUROSTAT"})
 
 
 def humanize_region_name(region: str) -> str:
@@ -133,7 +147,15 @@ def humanize_region_name(region: str) -> str:
 
 
 def canonical_aggregate_region(value: Any) -> Optional[str]:
-    """Identify an exact established aggregate entity, without expanding members."""
+    """Identify an established aggregate entity, without expanding members.
+
+    Exact entity names and provider-native codes first; otherwise any code in
+    the aggregate code grammar (EA21, EA19, EU28, EU27_2020, ...) is the same
+    logical entity as its family (EUROZONE / EU). A provider that serves the
+    composition a dataset actually publishes (Eurostat EA21 for a euro-area
+    request) must keep the requested identity in plan verification, coverage
+    and cache admission, and in a later turn's provider switch.
+    """
     if not isinstance(value, str) or not value.strip():
         return None
     key = re.sub(r"[_\s]+", " ", value.strip()).casefold()
@@ -143,17 +165,33 @@ def canonical_aggregate_region(value: Any) -> Optional[str]:
             for alias in (region, native_code, humanize_region_name(region)):
                 if key == re.sub(r"[_\s]+", " ", alias.strip()).casefold():
                     matches.add(region)
-    return next(iter(matches)) if len(matches) == 1 else None
+    if matches:
+        return next(iter(matches)) if len(matches) == 1 else None
+    parsed = aggregate_geo_family(value)
+    return AGGREGATE_GEO_FAMILY_REGIONS.get(parsed.family) if parsed else None
 
 
 def normalize_aggregate_geography(provider: str, params: dict) -> dict:
-    """Use the selected provider's native ID, or retain the established entity label."""
-    mapping = PROVIDER_GROUP_AGGREGATES.get(normalize_provider_name(provider), {})
+    """Use the selected provider's native ID, or retain the established entity label.
+
+    A specific composition code (EA19, EU28, EA21) addressed to a provider in
+    AGGREGATE_COMPOSITION_RESOLVING_PROVIDERS is kept verbatim: that provider
+    honours it where published and otherwise substitutes within the family
+    with a disclosure note. Logical names ("Euro area", "EMU") and bare family
+    codes still map to the provider's native first-attempt code.
+    """
+    provider_norm = normalize_provider_name(provider)
+    mapping = PROVIDER_GROUP_AGGREGATES.get(provider_norm, {})
+    keeps_composition_codes = provider_norm in AGGREGATE_COMPOSITION_RESOLVING_PROVIDERS
     normalized = dict(params)
     def normalize_entity(value: Any) -> Any:
         region = canonical_aggregate_region(value)
         if region is None:
             return value
+        if keeps_composition_codes:
+            parsed = aggregate_geo_family(value)
+            if parsed is not None and not parsed.is_changing_composition:
+                return value
         return mapping.get(region, humanize_region_name(region))
 
     if "country" in normalized:

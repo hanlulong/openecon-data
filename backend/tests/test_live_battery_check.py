@@ -40,13 +40,13 @@ def test_true_silent_empty_is_still_flagged():
     assert battery.check({"data": []}, {"nonempty": True}) == ["empty data (empty)"]
 
 
-@pytest.mark.parametrize("country", ["EA", "EA20", "EA21", "EMU", "XM", "EZ19", "Euro area"])
+@pytest.mark.parametrize("country", ["EA", "EA20", "EA21", "EMU", "EURO", "U2", "XM", "EZ19", "Euro area"])
 def test_any_euro_area_entity_satisfies_euro_area_intent(country):
     exp = {"nonempty": True, "geo_any_of": battery.EURO_AREA_GEO}
     assert battery.check({"data": [_series(country)]}, exp) == []
 
 
-@pytest.mark.parametrize("country", ["EU27_2020", "EU", "DE", "Estonia"])
+@pytest.mark.parametrize("country", ["EU27_2020", "EU", "DE", "Estonia", "European Union"])
 def test_wrong_aggregate_or_country_fails_euro_area_intent(country):
     exp = {"nonempty": True, "geo_any_of": battery.EURO_AREA_GEO}
     problems = battery.check({"data": [_series(country)]}, exp)

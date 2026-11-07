@@ -69,10 +69,13 @@ def response_status(resp):
 
 
 # Intent-level geography: any served euro-area entity satisfies a euro-area
-# question (Eurostat EA/EA21, World Bank EMU, IMF/ECB XM, FRED EZ*, or the
-# "Euro area" label). An EU27 or single-country answer does not. Never pins a
-# series id.
-EURO_AREA_GEO = (r"EA\d*", r"EZ\d*", r"EMU", r"XM", r"euro[\s_-]*(area|zone).*", r"eurozone")
+# question (Eurostat EA/EA21, World Bank EMU, IMF DataMapper EURO, ECB U2,
+# BIS XM, FRED EZ*, or the "Euro area" label). An EU27 or single-country answer
+# does not. Never pins a series id.
+EURO_AREA_GEO = (
+    r"EA\d*", r"EZ\d*", r"EMU", r"EURO", r"U2", r"XM",
+    r"euro[\s_-]*(area|zone).*", r"eurozone",
+)
 
 
 def _served_geographies(series_meta):

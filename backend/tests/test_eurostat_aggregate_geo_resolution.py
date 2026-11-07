@@ -6,32 +6,48 @@ Bulgaria joined on 2026-01-01, une_rt_m stopped publishing EA20 (geo=EA20
 returns an empty geo dimension) and carries only EA21, while teicp000 keeps
 EA/EA20/EA21. The mechanism under test resolves the requested aggregate
 against the DATASET'S OWN codelist; nothing here pins a code-to-code table.
+The logical euro-area token (bare "EA") resolves to the newest FIXED
+composition the dataset publishes: the changing-composition series steps at
+every accession (live namq_10_gdp: EA 2025-Q1 = the EA20 level, 2026-Q1 = the
+EA21 level), so growth computed on it is wrong for the accession year.
 """
 from __future__ import annotations
 
 import pytest
 
 from backend.providers import eurostat as eurostat_module
-from backend.providers.eurostat import (
-    EurostatProvider,
-    eurostat_aggregate_geo_family,
-    resolve_eurostat_aggregate_geo,
-)
-from backend.utils.retry import DataNotAvailableError
+from backend.providers.eurostat import EurostatProvider, resolve_eurostat_aggregate_geo
+from backend.utils.geographies import aggregate_geo_family
+from backend.utils.retry import DataNotAvailableError, ProviderCoolingDown
 
 
 # ---------------------------------------------------------------- unit: resolver
 
 @pytest.mark.parametrize("available,expected", [
     ({"EU27_2020", "EA21", "DE", "FR"}, "EA21"),
-    ({"EA", "EA20", "EA21", "DE"}, "EA"),
+    # The changing-composition code is published too, but the newest fixed
+    # composition is one consistent country set.
+    ({"EA", "EA20", "EA21", "DE"}, "EA21"),
+    ({"EA", "EA19", "EA20"}, "EA20"),
     ({"EA20", "EU27_2020"}, "EA20"),
     ({"EA19", "EA20", "EA21"}, "EA21"),
+    # Only the changing composition published: serve it.
+    ({"EA", "EU27_2020", "DE"}, "EA"),
     # A future composition needs no code change.
     ({"EA21", "EA22"}, "EA22"),
 ])
 def test_logical_euro_area_resolves_to_what_the_dataset_publishes(available, expected):
     assert resolve_eurostat_aggregate_geo("EA", available) == expected
+
+
+def test_logical_token_prefers_a_composition_observed_at_the_latest_period():
+    assert resolve_eurostat_aggregate_geo("EA", {"EA20", "EA21"}, {"EA20"}) == "EA20"
+    assert resolve_eurostat_aggregate_geo("EA", {"EA20", "EA21"}, {"EA20", "EA21"}) == "EA21"
+
+
+@pytest.mark.parametrize("requested", ["EA19", "EA20"])
+def test_explicit_fixed_composition_is_honoured_when_published(requested):
+    assert resolve_eurostat_aggregate_geo(requested, {"EA", "EA19", "EA20", "EA21"}) == requested
 
 
 def test_persisted_fixed_composition_code_is_kept_when_published():
@@ -62,7 +78,7 @@ def test_resolution_never_crosses_aggregate_families():
 
 @pytest.mark.parametrize("code", ["DE", "EE", "ES", "EL", "FR", "DE30", "FR_CAP", ""])
 def test_non_aggregate_geos_are_untouched(code):
-    assert eurostat_aggregate_geo_family(code) is None
+    assert aggregate_geo_family(code) is None
     assert resolve_eurostat_aggregate_geo(code, {"EA21", "EU27_2020", "DE"}) is None
 
 
@@ -155,10 +171,11 @@ async def test_euro_area_request_resolves_to_dataset_published_code_with_disclos
     assert result.metadata.country == "EA21"
     assert [p.value for p in result.data] == [6.5, 6.5]
     notes = " ".join(result.metadata.notes or [])
-    assert "EA21" in notes and "does not publish EA" in notes
+    assert "euro area served as EA21" in notes and "Euro area - EA21" in notes
+    # The logical token reads the codelist first, then fetches the resolved code.
     geos = [call.get("geo") for call in client.calls]
-    assert geos == ["EA", None, "EA21"]
-    probe = client.calls[1]
+    assert geos == [None, "EA21"]
+    probe = client.calls[0]
     assert probe["lastTimePeriod"] == "1" and "freq" not in probe and "sinceTimePeriod" not in probe
 
 
@@ -187,14 +204,86 @@ async def test_persisted_ea20_state_resolves_against_ea21_only_dataset(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_published_headline_code_costs_no_extra_request(monkeypatch):
-    provider, client = _provider(monkeypatch, {"EA": 2.1, "EA20": 2.0, "EA21": 2.1})
+async def test_logical_euro_area_prefers_newest_fixed_composition_over_changing_one(monkeypatch):
+    provider, client = _provider(monkeypatch, {"EA": 2.1, "EA20": 2.0, "EA21": 2.2})
 
     result = await provider.fetch_indicator("hicp_test_m", country="euro area", start_year=2026)
 
-    assert result.metadata.country == "EA"
+    assert result.metadata.country == "EA21"
+    assert [p.value for p in result.data] == [2.2, 2.2]
+    assert [call.get("geo") for call in client.calls] == [None, "EA21"]
+    client.calls.clear()
+    # Cached codelist: the next euro-area request costs no probe.
+    again = await provider.fetch_indicator("hicp_test_m", country="Eurozone", start_year=2026)
+    assert again.metadata.country == "EA21"
+    assert [call.get("geo") for call in client.calls] == ["EA21"]
+
+
+@pytest.mark.asyncio
+async def test_published_specific_composition_costs_no_extra_request(monkeypatch):
+    provider, client = _provider(monkeypatch, {"EA": 2.1, "EA20": 2.0, "EA21": 2.2})
+
+    result = await provider.fetch_indicator("hicp_test_m", country="EA20", start_year=2026)
+
+    assert result.metadata.country == "EA20"
     assert not result.metadata.notes
-    assert [call.get("geo") for call in client.calls] == ["EA"]
+    assert [call.get("geo") for call in client.calls] == ["EA20"]
+
+
+@pytest.mark.asyncio
+async def test_changing_composition_only_dataset_is_served_with_disclosure(monkeypatch):
+    provider, client = _provider(monkeypatch, {"EA": 2.1, "DE": 2.4})
+
+    result = await provider.fetch_indicator("hicp_test_m", country="Euro area", start_year=2026)
+
+    assert result.metadata.country == "EA"
+    notes = " ".join(result.metadata.notes or [])
+    assert "changing-composition" in notes and "member countries change" in notes
+    assert [call.get("geo") for call in client.calls] == [None, "EA"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("country", ["Euro area", "EA20"])
+async def test_codelist_probe_cooldown_is_not_swallowed(monkeypatch, country):
+    # Only the no-geo codelist probe hits the cooldown. Swallowing it would end
+    # as "No data found" (a plain DataNotAvailableError) instead of surfacing
+    # the cooldown that stops the caller's fan-out.
+    provider, client = _provider(monkeypatch, {"EA21": 6.5})
+
+    async def get_with_retry(_client, url, *, params, raise_on_status, timeout):
+        if "geo" not in params:
+            raise ProviderCoolingDown("Eurostat cooling down")
+        return await client.get(url, params=params, timeout=timeout)
+
+    provider._get_with_retry = get_with_retry
+    with pytest.raises(ProviderCoolingDown):
+        await provider.fetch_indicator("une_test_m", country=country, start_year=2026)
+
+
+@pytest.mark.asyncio
+async def test_failed_codelist_probe_falls_back_to_the_family_code_and_is_not_repeated(monkeypatch):
+    # A probe the dataset refuses (e.g. too large even for lastTimePeriod=1)
+    # leaves the logical token as the first attempt; the empty-result path must
+    # not fire the same failing probe a second time in the same fetch.
+    import httpx
+
+    provider, client = _provider(monkeypatch, {"EA": 2.1, "EA21": 2.2})
+    probes = []
+
+    async def get_with_retry(_client, url, *, params, raise_on_status, timeout):
+        if "geo" not in params:
+            probes.append(dict(params))
+            request = httpx.Request("GET", url)
+            raise httpx.HTTPStatusError(
+                "413", request=request, response=httpx.Response(413, request=request)
+            )
+        return await client.get(url, params=params, timeout=timeout)
+
+    provider._get_with_retry = get_with_retry
+    result = await provider.fetch_indicator("hicp_test_m", country="Euro area", start_year=2026)
+
+    assert result.metadata.country == "EA"
+    assert len(probes) == 1
 
 
 @pytest.mark.asyncio
@@ -242,10 +331,10 @@ async def test_cached_codelist_with_published_code_is_not_reprobed_on_other_empt
     provider = EurostatProvider()
 
     first = await provider.fetch_indicator("hicp_test_manr", country="Euro area", start_year=2026)
-    assert first.metadata.country == "EA" and not first.metadata.notes
+    assert first.metadata.country == "EA21"
     client.calls.clear()
 
     second = await provider.fetch_indicator("hicp_test_manr", country="Euro area", start_year=2026)
-    assert second.metadata.country == "EA"
+    assert second.metadata.country == "EA21"
     # Inferred-freq empty -> native-frequency retry only; no second codelist probe.
     assert [("geo" in call, call.get("freq")) for call in client.calls] == [(True, "A"), (True, None)]

@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ..models import NormalizedData, ParsedIntent
 from ..routing.country_resolver import CountryResolver
 from ..services.relevance_scorer import extract_indicator_cues
+from ..utils.geographies import aggregate_geo_family
 
 logger = logging.getLogger(__name__)
 
@@ -147,14 +148,12 @@ def provider_covers_country_list(provider: str, countries: Optional[List[str]]) 
     if provider_upper == "FRED":
         return all(_fred_catalog_covers_country(code) for code in normalized_iso2)
     if provider_upper == "EUROSTAT":
-        # Aggregate codes are recognized by Eurostat's code grammar (EA, EA21,
-        # EU27_2020, ...), not a fixed set: the provider now serves whichever
+        # Aggregate codes are recognized by the aggregate code grammar (EA,
+        # EA21, EU27_2020, ...), not a fixed set: the provider serves whichever
         # composition code a dataset publishes (EA21 since 2026), and that code
         # flows back through conversation state on the next turn.
-        from ..providers.eurostat import eurostat_aggregate_geo_family
-
         return all(
-            eurostat_aggregate_geo_family(code) is not None or CountryResolver.is_eu_member(code)
+            aggregate_geo_family(code) is not None or CountryResolver.is_eu_member(code)
             for code in normalized_iso2
         )
     if provider_upper == "OECD":

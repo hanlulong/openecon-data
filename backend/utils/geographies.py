@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+import re
+from typing import Any, Iterable, List, NamedTuple, Optional
 
 # Canonical region lists
 CANADIAN_PROVINCES: List[str] = [
@@ -102,3 +103,46 @@ def normalize_canadian_region_list(
                     canonical.append(territory)
 
     return canonical
+
+
+# ---------------------------------------------------------------------------
+# Aggregate-geography code grammar (EA / EU families)
+# ---------------------------------------------------------------------------
+# Statistical publishers (Eurostat, ECB) name an aggregate by a FAMILY prefix
+# (EA = euro area, EU = European Union), an optional composition member count
+# and an optional composition-vintage year: bare "EA"/"EU" is the changing
+# composition, "EA21" / "EU27_2020" / "EU28" are fixed compositions. Which
+# compositions a dataset publishes drifts with membership (Bulgaria joined the
+# euro area on 2026-01-01; une_rt_m then dropped EA20 and publishes only EA21),
+# so every layer that must recognise "this is the euro area / the EU" reads the
+# code grammar instead of a fixed code set. Structural code parsing only: it
+# never decides which composition a request means.
+_AGGREGATE_GEO_CODE_RE = re.compile(r"(EA|EU)(\d{1,2})?(?:_(\d{4}))?")
+
+# Family prefix -> the logical aggregate entity key used by provider_strategy
+# (PROVIDER_GROUP_AGGREGATES), plus a display name. Uniform reference table.
+AGGREGATE_GEO_FAMILY_REGIONS = {"EA": "EUROZONE", "EU": "EU"}
+AGGREGATE_GEO_FAMILY_NAMES = {"EA": "euro area", "EU": "European Union"}
+
+
+class AggregateGeoCode(NamedTuple):
+    family: str
+    members: int
+    vintage: int
+
+    @property
+    def is_changing_composition(self) -> bool:
+        """Bare family code ("EA", "EU"): membership changes over time."""
+        return self.members == 0 and self.vintage == 0
+
+
+def aggregate_geo_family(code: Any) -> Optional[AggregateGeoCode]:
+    """Parse an aggregate geo code into (family, members, vintage).
+
+    Returns None for anything that is not an EA*/EU* aggregate code, so
+    individual countries ("DE", "EE", "EL") are never treated as aggregates.
+    """
+    match = _AGGREGATE_GEO_CODE_RE.fullmatch(str(code or "").strip().upper())
+    if not match:
+        return None
+    return AggregateGeoCode(match.group(1), int(match.group(2) or 0), int(match.group(3) or 0))

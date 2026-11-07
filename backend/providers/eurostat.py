@@ -11,7 +11,8 @@ import httpx
 from ..config import get_settings
 from ..services.http_pool import get_http_client, effective_timeout
 from ..models import Metadata, NormalizedData
-from ..utils.retry import DataNotAvailableError
+from ..utils.geographies import AGGREGATE_GEO_FAMILY_NAMES, aggregate_geo_family
+from ..utils.retry import DataNotAvailableError, ProviderCoolingDown
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -41,28 +42,13 @@ def _eurostat_dataset_unavailable_message(
     )
 
 
-# Eurostat aggregate-geography code grammar: an aggregate FAMILY prefix (EA =
-# euro area, EU = European Union), an optional composition member count and an
-# optional composition-vintage year ("EA" = changing composition; "EA21",
-# "EU27_2020" = fixed compositions). Which members of a family a dataset
-# publishes drifts with membership (Bulgaria joined the euro area on
-# 2026-01-01: une_rt_m then dropped EA20 and publishes only EA21), so the code
-# to request is read from each dataset's own geo codelist at fetch time.
-# Structural code-pattern parsing only — no per-code or per-dataset mapping.
-_AGGREGATE_GEO_CODE_RE = re.compile(r"(EA|EU)(\d{1,2})?(?:_(\d{4}))?")
+# Which composition codes of an aggregate (euro area, EU) a dataset publishes
+# drifts with membership: after Bulgaria joined on 2026-01-01 une_rt_m dropped
+# EA20 and publishes only EA21, while teicp000 keeps EA/EA20/EA21. The code to
+# request is therefore read from each dataset's own geo codelist at fetch time
+# (code grammar: backend.utils.geographies.aggregate_geo_family). Structural
+# only — no per-code or per-dataset mapping.
 _GEO_CODELIST_TTL_SECONDS = 6 * 3600
-
-
-def eurostat_aggregate_geo_family(code: Any) -> Optional[tuple[str, int, int]]:
-    """Parse a Eurostat aggregate geo code into (family, members, vintage).
-
-    Returns None for anything that is not an EA*/EU* aggregate code, so
-    individual countries are never touched by aggregate resolution.
-    """
-    match = _AGGREGATE_GEO_CODE_RE.fullmatch(str(code or "").strip().upper())
-    if not match:
-        return None
-    return match.group(1), int(match.group(2) or 0), int(match.group(3) or 0)
 
 
 def resolve_eurostat_aggregate_geo(
@@ -74,35 +60,50 @@ def resolve_eurostat_aggregate_geo(
 
     ``available`` is the dataset's geo codelist; ``observed`` the subset that
     carries an observation at the dataset's latest period (a freshness signal
-    — stale compositions like EU28 have none). Order: the requested code when
-    published; else the family's changing-composition headline code (bare
-    "EA"/"EU"); else the freshest fixed composition (observed first, then the
-    largest member count, then the latest vintage). Never crosses families:
+    — a stale composition such as EU28 has none). Order:
+
+    1. a SPECIFIC composition the request names (EA19, EA20, EU28,
+       EU27_2020) when the dataset publishes it — an explicit or carried code
+       is honoured as asked;
+    2. otherwise the newest FIXED composition of the same family the dataset
+       publishes: observed first, then the largest member count, then the
+       latest vintage. That is the current membership with a back-cast
+       history of the same countries;
+    3. otherwise the family's changing-composition code (bare "EA"/"EU") when
+       that is all the dataset publishes.
+
+    A bare requested code is the logical "euro area"/"EU" token, so it skips
+    step 1: the changing-composition series steps at every accession (live
+    namq_10_gdp CP_MEUR: EA 2025-Q1 is the EA20 level and 2026-Q1 the EA21
+    level, so a YoY computed on it overstated 2026 growth by ~0.7pp), while a
+    fixed composition is one consistent country set. Never crosses families:
     a euro-area request is never answered with an EU aggregate. Returns None
     when ``requested`` is not an aggregate or the family is not published.
     """
     requested_code = str(requested or "").strip().upper()
-    family = eurostat_aggregate_geo_family(requested_code)
+    family = aggregate_geo_family(requested_code)
     if family is None:
         return None
     available_codes = {str(code).strip().upper() for code in (available or ())}
-    if requested_code in available_codes:
+    if not family.is_changing_composition and requested_code in available_codes:
         return requested_code
     observed_codes = {str(code).strip().upper() for code in (observed or ())}
-    members = []
+    fixed: list[tuple[str, Any]] = []
+    changing: Optional[str] = None
     for code in available_codes:
-        parsed = eurostat_aggregate_geo_family(code)
-        if parsed is not None and parsed[0] == family[0]:
-            members.append((code, parsed))
-    if not members:
-        return None
-    for code, (_, member_count, vintage) in members:
-        if member_count == 0 and vintage == 0:
-            return code
-    return max(
-        members,
-        key=lambda item: (item[0] in observed_codes, item[1][1], item[1][2], item[0]),
-    )[0]
+        parsed = aggregate_geo_family(code)
+        if parsed is None or parsed.family != family.family:
+            continue
+        if parsed.is_changing_composition:
+            changing = code
+        else:
+            fixed.append((code, parsed))
+    if fixed:
+        return max(
+            fixed,
+            key=lambda item: (item[0] in observed_codes, item[1].members, item[1].vintage, item[0]),
+        )[0]
+    return changing
 
 
 # Genuine growth/change-RATE intent. A bare "change" substring also matches
@@ -150,20 +151,21 @@ class EurostatProvider(BaseProvider):
         "CYPRUS": "CY",
         "LUXEMBOURG": "LU",
         "MALTA": "MT",
-        # EU aggregates. These are the FIRST-ATTEMPT codes only: the code a
-        # given dataset publishes is resolved against its own geo codelist at
-        # fetch time (resolve_eurostat_aggregate_geo), so composition changes
-        # (EA20 -> EA21 in 2026) never need an edit here. The euro area maps to
-        # Eurostat's changing-composition headline code "EA".
+        # EU aggregates. These are FIRST-ATTEMPT codes only: the code a given
+        # dataset publishes is resolved against its own geo codelist at fetch
+        # time (resolve_eurostat_aggregate_geo), so composition changes (EA20
+        # -> EA21 in 2026) never need an edit here. The euro area maps to the
+        # bare family code "EA", the logical token the resolver turns into the
+        # newest fixed composition the dataset publishes. Specific composition
+        # codes (EA19, EA20, EU28) pass through unmapped and are honoured where
+        # published.
         "EU": "EU27_2020",
         "EUROPEAN UNION": "EU27_2020",
         "EURO AREA": "EA",
         "EUROZONE": "EA",
         "EU_27": "EU27_2020",
         "EU27": "EU27_2020",
-        "EA": "EA",
         "EA_20": "EA20",
-        "EA19": "EA",  # stale fixed-composition name used for "the euro area"
     }
 
     # Comprehensive dimension mappings for top Eurostat datasets
@@ -314,17 +316,7 @@ class EurostatProvider(BaseProvider):
         country_code = None if no_geo_filter else self._country_code(raw_country or "EU")
         if country_code:
             country_code = self._default_geo_for_dataset(dataset_code, country_code)
-        # Aggregate geographies (EA*, EU*) are resolved against the dataset's
-        # own geo codelist. A cached codelist resolves BEFORE the first fetch;
-        # otherwise the first fetch uses the code as given and only an empty
-        # result triggers the codelist probe below (no extra request on the
-        # happy path).
         requested_geo_code = country_code
-        cached_codelist = self._cached_geo_codelist(dataset_code) if country_code else None
-        if cached_codelist is not None:
-            resolved_geo = resolve_eurostat_aggregate_geo(country_code, *cached_codelist)
-            if resolved_geo:
-                country_code = resolved_geo
 
         # Use JSON-stat API endpoint (statistics/1.0) instead of SDMX
         # This is more reliable and doesn't have the 406 Not Acceptable errors
@@ -404,7 +396,6 @@ class EurostatProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance
         client = get_http_client()
-        effective_query_params = dict(query_params)
 
         async def fetch_payload(params: Dict[str, str]) -> Dict[str, Any]:
             # Route through the shared base helper so the primary Eurostat path
@@ -434,6 +425,33 @@ class EurostatProvider(BaseProvider):
             # exactly as the previous direct client.get() path did.
             response.raise_for_status()
             return response.json()
+
+        # Aggregate geographies (EA*, EU*) are resolved against the dataset's
+        # own geo codelist (resolve_eurostat_aggregate_geo). A cached codelist
+        # resolves BEFORE the first fetch. The logical family token (bare "EA",
+        # what "euro area" maps to) has no right answer without the codelist,
+        # so an uncached one reads it first: one no-geo lastTimePeriod=1 probe,
+        # then cached per dataset. A specific composition code (EA20, EU27_2020)
+        # is fetched as given and only an empty result probes the codelist.
+        geo_family = aggregate_geo_family(country_code) if country_code else None
+        geo_codelist = self._cached_geo_codelist(dataset_code) if geo_family else None
+        # At most one codelist probe per fetch: a probe that failed (e.g. a
+        # dataset too large even for lastTimePeriod=1) is not repeated on the
+        # empty-result path below.
+        geo_codelist_probed = False
+        if geo_family is not None and geo_codelist is None and geo_family.is_changing_composition:
+            geo_codelist_probed = True
+            geo_codelist = await self._load_geo_codelist(
+                fetch_payload=fetch_payload,
+                query_params=query_params,
+                dataset_code=dataset_code,
+            )
+        if geo_codelist is not None:
+            resolved_geo = resolve_eurostat_aggregate_geo(country_code, *geo_codelist)
+            if resolved_geo and resolved_geo != country_code:
+                country_code = resolved_geo
+                query_params["geo"] = resolved_geo
+        effective_query_params = dict(query_params)
 
         try:
             payload = await fetch_payload(effective_query_params)
@@ -496,26 +514,39 @@ class EurostatProvider(BaseProvider):
         if (
             not data_points
             and country_code
-            and cached_codelist is None
-            and eurostat_aggregate_geo_family(country_code) is not None
+            and geo_codelist is None
+            and not geo_codelist_probed
+            and aggregate_geo_family(country_code) is not None
         ):
             # The aggregate code returned nothing: read the dataset's geo
             # codelist (the same no-geo lastTimePeriod=1 probe the
             # supportability check uses) and retry once with the code this
             # dataset actually publishes for the same aggregate family. A
-            # fresh cached codelist already resolved the code above, so an
-            # empty result then has another cause (e.g. an inferred freq the
-            # later retries handle) and is not re-probed.
-            resolved_geo = await self._resolve_aggregate_geo_from_dataset(
+            # known codelist already resolved the code above, so an empty
+            # result then has another cause (e.g. an inferred freq the later
+            # retries handle) and is not re-probed.
+            geo_codelist = await self._load_geo_codelist(
                 fetch_payload=fetch_payload,
                 query_params=query_params,
                 dataset_code=dataset_code,
-                requested_geo=country_code,
+            )
+            resolved_geo = (
+                resolve_eurostat_aggregate_geo(country_code, *geo_codelist)
+                if geo_codelist is not None
+                else None
             )
             if resolved_geo and resolved_geo != country_code:
+                logger.info(
+                    "Eurostat %s: aggregate geo %s not published; resolved to %s from the dataset codelist",
+                    dataset_code,
+                    country_code,
+                    resolved_geo,
+                )
                 retry_params = {**effective_query_params, "geo": resolved_geo}
                 try:
                     retry_payload = await fetch_payload(retry_params)
+                except ProviderCoolingDown:
+                    raise
                 except (httpx.HTTPStatusError, DataNotAvailableError) as geo_retry_error:
                     logger.debug(
                         "Eurostat %s: aggregate geo retry %s failed: %s",
@@ -560,6 +591,8 @@ class EurostatProvider(BaseProvider):
                     frequency = retry_frequency
                     slice_notes = retry_notes
                     effective_query_params = no_freq_params
+            except ProviderCoolingDown:
+                raise
             except (httpx.HTTPStatusError, DataNotAvailableError) as freq_retry_error:
                 logger.debug(
                     "Eurostat no-freq retry failed for %s: %s",
@@ -657,20 +690,11 @@ class EurostatProvider(BaseProvider):
         elif "clv" in dataset_code.lower() or "constant" in indicator_lower or "real" in indicator_lower:
             price_type = "Constant prices"
 
-        if requested_geo_code and country_code != requested_geo_code:
-            # Disclose the aggregate-code substitution: same aggregate family,
-            # but the composition code this dataset actually publishes.
-            served_label = self._extract_geo_categories(payload).get(country_code) or ""
-            if not served_label:
-                cached = self._geo_codelist_store().get(dataset_code.lower())
-                served_label = (cached[1].get(country_code) if cached else "") or ""
-            label_suffix = f" ({served_label})" if served_label else ""
-            slice_notes = [
-                *(slice_notes or []),
-                f"Geography: Eurostat dataset {dataset_code} does not publish "
-                f"{requested_geo_code}; served {country_code}{label_suffix}, the "
-                "code this dataset publishes for the same aggregate.",
-            ]
+        geography_note = self._aggregate_geo_note(
+            dataset_code, requested_geo_code, country_code, payload
+        )
+        if geography_note:
+            slice_notes = [*(slice_notes or []), geography_note]
 
         # Extract start and end dates from data points
         start_date = data_points[0]["date"] if data_points else None
@@ -748,7 +772,10 @@ class EurostatProvider(BaseProvider):
             raise
 
         available_geo = self._extract_geo_categories(probe_payload)
-        self._remember_geo_codelist(dataset_code, probe_payload)
+        # This probe keeps the request's untilTimePeriod and inferred freq, so
+        # its observations are not a latest-period freshness signal: cache the
+        # codelist only.
+        self._remember_geo_codelist(dataset_code, probe_payload, with_observed=False)
         if not available_geo or requested_geo in available_geo:
             return None
         if not all(
@@ -766,22 +793,21 @@ class EurostatProvider(BaseProvider):
             f"available_geo={available_codes}"
         )
 
-    async def _resolve_aggregate_geo_from_dataset(
+    async def _load_geo_codelist(
         self,
         *,
         fetch_payload: Callable[[Dict[str, str]], Awaitable[Dict[str, Any]]],
         query_params: Dict[str, str],
         dataset_code: str,
-        requested_geo: str,
-    ) -> Optional[str]:
-        """Resolve an aggregate geo code against the dataset's own geo codelist.
+    ) -> Optional[tuple[Dict[str, str], frozenset]]:
+        """Read and cache the dataset's own geo codelist; None when unavailable.
 
-        Runs only after the requested aggregate returned no observations. The
-        probe drops the geo/time window and the inferred freq (a wrong inferred
-        freq would hide every geo) and asks for the latest period only, which
-        returns the dataset's geo codelist plus a latest-period freshness
-        signal. Structural: decided by the provider's published codelist, not
-        by any per-dataset or per-code table.
+        The probe drops the geo/time window and the inferred freq (a wrong
+        inferred freq would hide every geo) and asks for the latest period
+        only, which returns the dataset's geo codelist plus a latest-period
+        freshness signal. Structural: decided by the provider's published
+        codelist, not by any per-dataset or per-code table. A provider
+        cooldown is re-raised so callers stop instead of fanning out.
         """
         probe_params = {
             key: value
@@ -791,22 +817,56 @@ class EurostatProvider(BaseProvider):
         probe_params["lastTimePeriod"] = "1"
         try:
             probe_payload = await fetch_payload(probe_params)
+        except ProviderCoolingDown:
+            raise
         except (httpx.HTTPStatusError, DataNotAvailableError) as exc:
             logger.debug("Eurostat %s: geo codelist probe failed: %s", dataset_code, exc)
             return None
         self._remember_geo_codelist(dataset_code, probe_payload)
-        cached = self._cached_geo_codelist(dataset_code)
-        if cached is None:
+        return self._cached_geo_codelist(dataset_code)
+
+    def _aggregate_geo_note(
+        self,
+        dataset_code: str,
+        requested_geo: Optional[str],
+        served_geo: Optional[str],
+        payload: Dict[str, Any],
+    ) -> Optional[str]:
+        """Disclosure line for an aggregate served under a different code.
+
+        Same aggregate family by construction (the resolver never crosses
+        families); the note names the composition actually served, with
+        Eurostat's own label, so "euro area" answers say which countries.
+        """
+        served = aggregate_geo_family(served_geo)
+        requested = aggregate_geo_family(requested_geo)
+        if served is None or requested is None:
             return None
-        resolved = resolve_eurostat_aggregate_geo(requested_geo, *cached)
-        if resolved and resolved != requested_geo:
-            logger.info(
-                "Eurostat %s: aggregate geo %s not published; resolved to %s from the dataset codelist",
-                dataset_code,
-                requested_geo,
-                resolved,
+        served_label = self._extract_geo_categories(payload).get(str(served_geo)) or ""
+        if not served_label:
+            cached = self._geo_codelist_store().get(str(dataset_code or "").strip().lower())
+            served_label = (cached[1].get(str(served_geo)) if cached else "") or ""
+        label_suffix = f" ({served_label})" if served_label else ""
+        family_name = AGGREGATE_GEO_FAMILY_NAMES.get(served.family, served.family)
+        if served.is_changing_composition:
+            return (
+                f"Geography: {family_name} served as Eurostat's changing-composition "
+                f"aggregate {served_geo}{label_suffix}, the only {family_name} code "
+                f"dataset {dataset_code} publishes; its member countries change over "
+                "the period."
             )
-        return resolved
+        if served_geo == requested_geo:
+            return None
+        if requested.is_changing_composition:
+            return (
+                f"Geography: {family_name} served as {served_geo}{label_suffix}, the "
+                f"newest fixed composition Eurostat dataset {dataset_code} publishes."
+            )
+        return (
+            f"Geography: Eurostat dataset {dataset_code} does not publish "
+            f"{requested_geo}; served {served_geo}{label_suffix}, the composition "
+            f"this dataset publishes for the {family_name}."
+        )
 
     def _geo_codelist_store(self) -> Dict[str, tuple[float, Dict[str, str], frozenset]]:
         """Per-instance codelist cache (tolerates instances built without __init__)."""
@@ -815,15 +875,23 @@ class EurostatProvider(BaseProvider):
             store = self.__dict__["_geo_codelists"] = {}
         return store
 
-    def _remember_geo_codelist(self, dataset_code: str, payload: Dict[str, Any]) -> None:
-        """Cache a dataset geo codelist read from a no-geo probe payload."""
+    def _remember_geo_codelist(
+        self, dataset_code: str, payload: Dict[str, Any], *, with_observed: bool = True
+    ) -> None:
+        """Cache a dataset geo codelist read from a no-geo probe payload.
+
+        ``observed`` (geos with a value in the payload) is only a tie-breaker
+        between fixed compositions; an empty set falls back to member count
+        and vintage.
+        """
         categories = self._extract_geo_categories(payload)
         if not categories:
             return
+        observed = self._observed_geo_codes(payload) if with_observed else set()
         self._geo_codelist_store()[str(dataset_code or "").strip().lower()] = (
             time.monotonic(),
             categories,
-            frozenset(self._observed_geo_codes(payload)),
+            frozenset(observed),
         )
 
     def _cached_geo_codelist(
@@ -904,7 +972,7 @@ class EurostatProvider(BaseProvider):
         normalized_label = str(label or "").strip().lower()
         if not normalized_code and not normalized_label:
             return False
-        if eurostat_aggregate_geo_family(normalized_code) is not None:
+        if aggregate_geo_family(normalized_code) is not None:
             return True
         if normalized_code.startswith(("EU_", "EA_")):
             return True

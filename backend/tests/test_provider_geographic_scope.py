@@ -97,7 +97,7 @@ def test_worldbank_preserves_explicit_canonical_group_members(worldbank, phrase,
 @pytest.mark.parametrize("alias,expected", [
     ("EU", "EU27_2020"), ("European Union", "EU27_2020"),
     ("European_Union", "EU27_2020"), (" European   Union ", "EU27_2020"),
-    ("Euro area", "EA"), ("Euro_area", "EA"), ("Eurozone", "EA"), ("EA19", "EA"),
+    ("Euro area", "EA"), ("Euro_area", "EA"), ("Eurozone", "EA"), ("EA19", "EA19"),
     ("EU_27", "EU27_2020"), ("EU27_2020", "EU27_2020"), ("EA20", "EA20"),
     ("Germany", "DE"), ("Greece", "EL"), ("Czech Republic", "CZ"),
 ])
@@ -150,8 +150,7 @@ async def test_worldbank_fetch_dispatch_preserves_requested_geography(
 @pytest.mark.parametrize("country,expected", [
     *((country, country.upper()) for country in UNRESOLVED_EUROPE),
     ("European Union", "EU27_2020"), ("European_Union", "EU27_2020"),
-    ("Euro area", "EA"), ("EU27_2020", "EU27_2020"),
-    ("EA20", "EA20"), ("Germany", "DE"),
+    ("EU27_2020", "EU27_2020"), ("EA20", "EA20"), ("EA19", "EA19"), ("Germany", "DE"),
 ])
 async def test_eurostat_fetch_dispatch_preserves_requested_geography(
     eurostat, monkeypatch, country, expected,
@@ -172,3 +171,52 @@ async def test_eurostat_fetch_dispatch_preserves_requested_geography(
     assert captured["params"]["geo"] == expected
     assert captured["url"].endswith("/nama_10_gdp")
     assert captured["params"]["sinceTimePeriod"] == "2023"
+
+
+class _CodelistResponse:
+    status_code = 200
+
+    def __init__(self, geos):
+        self._geos = geos
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {
+            "id": ["geo", "time"], "size": [len(self._geos), 1],
+            "dimension": {
+                "geo": {"category": {"index": {g: i for i, g in enumerate(self._geos)},
+                                     "label": {g: g for g in self._geos}}},
+                "time": {"category": {"index": {"2025": 0}, "label": {"2025": "2025"}}},
+            },
+            "value": {},
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("country", ["Euro area", "Euro_area", "Eurozone", "EA"])
+async def test_eurostat_logical_euro_area_dispatches_the_dataset_published_composition(
+    eurostat, monkeypatch, country,
+):
+    # The logical euro-area token reads the dataset's geo codelist first and
+    # requests the newest fixed composition it publishes.
+    monkeypatch.setattr(eurostat, "_resolve_dataset", AsyncMock(return_value=("nama_10_gdp", "GDP")))
+    monkeypatch.setattr("backend.providers.eurostat.get_http_client", lambda: object())
+    eurostat.__dict__.pop("_geo_codelists", None)
+    calls = []
+
+    async def capture(client, url, **kwargs):
+        calls.append(dict(kwargs["params"]))
+        if "geo" not in kwargs["params"]:
+            return _CodelistResponse(["EU27_2020", "EA", "EA20", "EA21", "DE"])
+        raise DispatchCaptured
+
+    monkeypatch.setattr(eurostat, "_get_with_retry", capture)
+    with pytest.raises(DispatchCaptured):
+        await eurostat.fetch_indicator(
+            indicator="nama_10_gdp", country=country, start_year=2023, end_year=2023,
+        )
+    assert calls[0]["lastTimePeriod"] == "1" and "geo" not in calls[0]
+    assert calls[1]["geo"] == "EA21"
+    assert calls[1]["sinceTimePeriod"] == "2023"

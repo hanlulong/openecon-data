@@ -207,7 +207,7 @@ async def test_native_aggregate_no_data_never_requests_member_countries(monkeypa
 
 
 @pytest.mark.parametrize("native,provider,expected", [
-    ("EUU", "EUROSTAT", "EU27_2020"), ("EMU", "EUROSTAT", "EA20"),
+    ("EUU", "EUROSTAT", "EU27_2020"), ("EMU", "EUROSTAT", "EA"),
     ("EA20", "WORLDBANK", "EMU"),
     ("EUU", "FRED", "European Union"), ("EA20", "FRED", "euro area"),
 ])
