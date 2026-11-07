@@ -17,7 +17,8 @@
 #      (SSRF to backend:3001 / redis), block cloud metadata (169.254.169.254),
 #      allow DNS(53)+HTTPS(443), reject the rest. This is what stops the
 #      Layer-1 residual: under Layer-1-only, jailed httpx CAN still reach
-#      127.0.0.1:3001. With this, it cannot.
+#      127.0.0.1:3001. With this, it cannot. Mirrored for IPv6 via ip6tables
+#      (skipped with a warning when ip6tables/IPv6 netfilter is unavailable).
 #
 # After success it writes /etc/sudoers.d/promode (the marker the executor probes
 # to decide whether to run the jail as the promode uid).
@@ -27,6 +28,7 @@
 #   sudo groupdel promode-share 2>/dev/null
 #   sudo rm -f /etc/sudoers.d/promode
 #   sudo iptables -L OUTPUT -n --line-numbers   # then delete the promode rules
+#   sudo ip6tables -L OUTPUT -n --line-numbers  # same for the IPv6 mirror
 ###############################################################################
 set -euo pipefail
 
@@ -123,38 +125,69 @@ rm -f "$SUDOERS_TMP"
 TAG="promode-egress"
 PUID="$(id -u "$PROMODE_USER")"
 
-if command -v iptables >/dev/null 2>&1; then
-    # Remove any existing promode-egress rules (idempotency). iptables -S prints
-    # the comment WITHOUT quotes, so we match the bare tag. We round-trip each
-    # matching -A line into a -D delete until none remain (guard against loops).
-    _guard=0
-    while iptables -S OUTPUT 2>/dev/null | grep -q -- "--comment $TAG"; do
-        line="$(iptables -S OUTPUT | grep -- "--comment $TAG" | head -1 | sed 's/^-A/-D/')"
+# Remove every existing $TAG rule from OUTPUT for one netfilter family
+# (idempotency — also clears identical rules that were added by hand). -S
+# prints the comment WITHOUT quotes, so we match the bare tag. We round-trip
+# each matching -A line into a -D delete until none remain (loop-guarded).
+purge_tagged_rules() {
+    local ipt="$1" line _guard=0
+    while "$ipt" -S OUTPUT 2>/dev/null | grep -q -- "--comment $TAG"; do
+        line="$("$ipt" -S OUTPUT | grep -- "--comment $TAG" | head -1 | sed 's/^-A/-D/')"
         # shellcheck disable=SC2086
-        iptables $line 2>/dev/null || break
+        "$ipt" $line 2>/dev/null || break
         _guard=$((_guard + 1))
-        [ "$_guard" -gt 50 ] && { echo "WARN: too many promode-egress rules, aborting cleanup" >&2; break; }
+        if [ "$_guard" -gt 50 ]; then
+            echo "WARN: too many $TAG rules in $ipt, aborting cleanup" >&2
+            break
+        fi
     done
+    # Explicit success: under `set -e` a loop's last-body status must not
+    # abort provisioning when tagged rules already existed.
+    return 0
+}
 
-    add() { iptables -A OUTPUT -m owner --uid-owner "$PUID" "$@" -m comment --comment "$TAG"; }
+# Install the uid-scoped allowlist for one family. Extra args = family-specific
+# REJECT destinations inserted after loopback (e.g. the IPv4 metadata address).
+install_egress_allowlist() {
+    local ipt="$1"; shift
+    add() { "$ipt" -A OUTPUT -m owner --uid-owner "$PUID" "$@" -m comment --comment "$TAG"; }
+
+    purge_tagged_rules "$ipt"
 
     # Block loopback egress (SSRF to backend:3001, redis, etc.). DNS/HTTPS go out
     # the real interface, not lo, so this does not break legitimate fetches.
     add -o lo -j REJECT
-    # Block cloud metadata service.
-    add -d 169.254.169.254/32 -j REJECT
+    local dst
+    for dst in "$@"; do
+        add -d "$dst" -j REJECT
+    done
     # Allow DNS + HTTPS only.
     add -p udp --dport 53 -j ACCEPT
     add -p tcp --dport 53 -j ACCEPT
     add -p tcp --dport 443 -j ACCEPT
     # Reject everything else from promode.
     add -j REJECT
+}
 
+if command -v iptables >/dev/null 2>&1; then
+    # IPv4 also blocks the cloud metadata service.
+    install_egress_allowlist iptables 169.254.169.254/32
     echo "[promode-setup] iptables egress allowlist installed for uid $PUID"
-    echo "[promode-setup] NOTE: persist across reboot via netfilter-persistent/iptables-save or systemd ExecStartPre."
 else
-    echo "[promode-setup] WARNING: iptables not found; egress allowlist NOT applied." >&2
+    echo "[promode-setup] WARNING: iptables not found; IPv4 egress allowlist NOT applied." >&2
     echo "[promode-setup] Layer-1 mount isolation still hides all secrets; SSRF to loopback remains possible." >&2
 fi
+
+# IPv6 mirror. Without it a host with IPv6 connectivity leaves promode's v6
+# egress (including ::1 loopback) completely open, bypassing the v4 allowlist.
+# Skip with a warning when ip6tables is absent or the kernel has no IPv6
+# netfilter (the -S probe fails), rather than aborting the whole provision.
+if command -v ip6tables >/dev/null 2>&1 && ip6tables -S OUTPUT >/dev/null 2>&1; then
+    install_egress_allowlist ip6tables
+    echo "[promode-setup] ip6tables egress allowlist installed for uid $PUID"
+else
+    echo "[promode-setup] WARNING: ip6tables unavailable; IPv6 egress allowlist NOT applied." >&2
+fi
+echo "[promode-setup] NOTE: persist across reboot via netfilter-persistent/iptables-save or systemd ExecStartPre."
 
 echo "[promode-setup] DONE. Pro Mode jail will now run as '$PROMODE_USER' (executor auto-detects the sudoers marker)."
