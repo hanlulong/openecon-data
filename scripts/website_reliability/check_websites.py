@@ -17,7 +17,7 @@ HOSTS = (
     "data.openecon.ai", "deepecon.ai", "www.deepecon.ai", "openecon.ai",
     "www.openecon.ai", "trade.hansearch.com",
 )
-KNOWN_DOWN = {"app.hansearch.com", "agent.hansearch.com"}
+KNOWN_DOWN = {"app.hansearch.com", "agent.hansearch.com", "jp.hansearch.com"}  # jp: intentionally down (owner-confirmed 2026-11-07)
 CANONICAL = {
     "deepecon.ai": "openecon.ai",
     "www.deepecon.ai": "openecon.ai",
