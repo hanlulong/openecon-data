@@ -19,13 +19,20 @@ import pytest
 
 from backend.models import Metadata, NormalizedData, ParsedIntent
 from backend.providers.fred import FREDProvider
+from backend.services import data_fetcher
 from backend.services import indicator_resolution as ir
-from backend.services.data_fetcher import _attach_requested_series_disclosure
-from backend.services.indicator_clarification import looks_like_provider_indicator_code
+from backend.services.data_fetcher import (
+    _attach_requested_series_disclosure,
+    _provider_request_contract,
+)
+from backend.services.indicator_clarification import (
+    build_prefetch_indicator_choice_clarification,
+    looks_like_provider_indicator_code,
+)
 from backend.services.indicator_selector import SelectionResult
 
-# Minimal fake catalog: provider -> code -> entry (frequency drives the FRED
-# native-aggregation decision; category drives the IMF exact-code check).
+# Minimal fake catalog: provider -> code -> entry (category drives the IMF
+# exact-code check).
 _CATALOG: Dict[str, Dict[str, Dict[str, Any]]] = {
     "FRED": {
         "T10YIE": {"code": "T10YIE", "frequency": "Daily"},
@@ -101,7 +108,15 @@ def test_literal_series_id_beats_llm_pick(provider, query, indicators, series_id
     assert params["indicator"] == expected
     assert params["__semantic_authority"] == "exact_user_input"
     assert params["__decision_source"] == "exact_code"
-    assert ir.REQUESTED_SERIES_ID_KEY not in params
+    # The lock keeps a (silent-when-served) stamp so a later fallback serve
+    # can still be disclosed.
+    assert params[ir.REQUESTED_SERIES_ID_KEY] == expected
+    assert params[ir.REQUESTED_SERIES_ID_STATUS_KEY] == "lock"
+    assert params[ir.REQUESTED_SERIES_PROVIDER_KEY] == provider
+    # The seriesId slot is canonicalized so dispatch keeps it.
+    assert params["seriesId"] == expected
+    # Never a frequency/aggregation side effect.
+    assert "frequency" not in params and "aggregation_method" not in params
     select.assert_not_awaited()
 
 
@@ -135,11 +150,35 @@ def test_series_id_slot_beats_rejected_code_in_indicator_slot() -> None:
     select.assert_not_awaited()
 
 
-def test_transform_suffix_survives_the_lock() -> None:
-    intent = _intent("FRED", "CPIAUCSL year over year", ["CPI"], {"seriesId": "CPIAUCSL:pc1"})
+def test_rejected_code_locked_by_literal_indicator_path_is_overridden_by_series_id() -> None:
+    """A second resolution pass: an earlier pass's literal-code path locked the
+    REJECTED code from the indicator slot (exact_user_input / exact_code). That
+    is a literal-code lock, not the user's clarification choice, so the
+    seriesId slot still wins."""
+    svc = _svc(lookup_result=("found", {"id": "WPSFD4"}))
+    intent = _intent(
+        "FRED", "FRED series code WPSFD4 (not PPIACO) since 2020", ["producer price index"],
+        {"seriesId": "WPSFD4", "indicator": "PPIACO",
+         "__semantic_authority": "exact_user_input", "__decision_source": "exact_code"},
+    )
+    params, _ = _resolve(svc, "FRED", intent, pick="PPIACO")
+    assert params["indicator"] == "WPSFD4"
+
+
+@pytest.mark.parametrize(
+    "query,series_id,expected",
+    [
+        ("CPIAUCSL year over year", "CPIAUCSL:pc1", "CPIAUCSL:pc1"),
+        ("cpiaucsl percent change from year ago", "cpiaucsl:pc1", "CPIAUCSL:pc1"),
+    ],
+)
+def test_transform_suffix_survives_the_lock(query, series_id, expected) -> None:
+    intent = _intent("FRED", query, ["CPI"], {"seriesId": series_id})
     params, _ = _resolve(_svc(), "FRED", intent)
     assert params["indicator"] == "CPIAUCSL"
-    assert params["seriesId"] == "CPIAUCSL:pc1"
+    assert params["seriesId"] == expected
+    # "year over year" is a transform, never a frequency request.
+    assert "frequency" not in params and "aggregation_method" not in params
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +290,39 @@ def test_unverifiable_code_never_claims_not_found() -> None:
     )]
     note = _attach_requested_series_disclosure(served, params, intent)[0].metadata.notes[0]
     assert "ZZTOP99" in note and "not found" not in note
+    assert "could not be verified" in note
+
+
+def _served(source: str, series_id: str, indicator: str = "x") -> list:
+    return [NormalizedData(
+        metadata=Metadata(source=source, indicator=indicator, frequency="annual", unit="%", seriesId=series_id),
+        data=[],
+    )]
+
+
+def test_locked_code_served_by_its_provider_is_never_disclosed() -> None:
+    """A locked code is silent whenever its own provider served it, even if the
+    provider echoes a decorated seriesId (dimension suffix, composite key)."""
+    params = {ir.REQUESTED_SERIES_ID_KEY: "NY.GDP.MKTP.CN", ir.REQUESTED_SERIES_ID_STATUS_KEY: "lock",
+              ir.REQUESTED_SERIES_PROVIDER_KEY: "WORLDBANK"}
+    served = _served("World Bank", "NY.GDP.MKTP.CN.composite")
+    assert _attach_requested_series_disclosure(served, params, None) is served
+
+
+def test_locked_code_replaced_by_cross_provider_fallback_is_disclosed() -> None:
+    params = {ir.REQUESTED_SERIES_ID_KEY: "T10YIE", ir.REQUESTED_SERIES_ID_STATUS_KEY: "lock",
+              ir.REQUESTED_SERIES_PROVIDER_KEY: "FRED"}
+    served = _served("World Bank", "FP.CPI.TOTL.ZG")
+    note = _attach_requested_series_disclosure(served, params, None)[0].metadata.notes[0]
+    assert "T10YIE" in note and "FP.CPI.TOTL.ZG" in note
+
+
+def test_disclosure_placeholder_is_localized() -> None:
+    params = {ir.REQUESTED_SERIES_ID_KEY: "ZZTOP99", ir.REQUESTED_SERIES_ID_STATUS_KEY: "not_found"}
+    served = _served("FRED", "")
+    served[0].metadata.indicator = ""
+    note = _attach_requested_series_disclosure(served, params, SimpleNamespace(language="zh"))[0].metadata.notes[0]
+    assert "最接近的可用序列" in note and "closest" not in note
 
 
 def test_disclosure_is_silent_when_requested_code_is_served() -> None:
@@ -263,40 +335,100 @@ def test_disclosure_is_silent_when_requested_code_is_served() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frequency: provider-native aggregation of the NAMED code (not a sibling map)
+# Frequency: the lock serves the NAMED code at its native frequency. Raw-text
+# frequency words are never turned into a hard FRED aggregation (deferred to a
+# structured parse slot): these real-user phrasings name a maturity, a rate
+# unit, a transform, an end-of-period value or a window — not a frequency.
 # ---------------------------------------------------------------------------
 
-def test_named_daily_code_with_coarser_request_gets_native_aggregation_params() -> None:
-    intent = _intent("FRED", "FRED DGS10 monthly 2025 2026", ["10-year treasury"], {"seriesId": "DGS10"})
-    params, select = _resolve(_svc(), "FRED", intent, pick="GS10")
-    assert params["indicator"] == "DGS10"
-    assert params["frequency"] == "monthly"
-    assert params["aggregation_method"] == "avg"
+@pytest.mark.parametrize(
+    "query,series_id",
+    [
+        ("US 3-Month Treasury Constant Maturity Rate DGS3MO last value", "DGS3MO"),
+        ("US nonfarm labor productivity percent change annual rate PRS85006092", "PRS85006092"),
+        ("FRED GDPC1 real GDP seasonally adjusted annual rate since 2015", "GDPC1"),
+        ("US PCE price index year-over-year, FRED series PCEPI, latest 3 months", "PCEPI"),
+        ("CPIAUCSL percent change from year ago, latest months", "CPIAUCSL"),
+        ("Fed balance sheet (WALCL) annual year-end values", "WALCL"),
+        ("Show DGS10 for the year 2025", "DGS10"),
+        ("FRED DGS10 monthly 2025 2026", "DGS10"),
+        ("FRED DGS10 year to date", "DGS10"),
+    ],
+)
+def test_named_code_lock_never_forces_a_frequency_transform(query, series_id) -> None:
+    svc = _svc(lookup_result=("found", {"id": series_id}))
+    intent = _intent("FRED", query, ["series"], {"seriesId": series_id})
+    params, select = _resolve(svc, "FRED", intent, pick="GS10")
+    assert params["indicator"] == series_id
+    assert "frequency" not in params and "aggregation_method" not in params
     select.assert_not_awaited()
 
 
-def test_named_code_at_native_frequency_adds_no_frequency_params() -> None:
-    intent = _intent("FRED", "FRED series T10YIE daily", ["breakeven"], {"seriesId": "T10YIE"})
-    params, _ = _resolve(_svc(), "FRED", intent)
-    assert "frequency" not in params and "aggregation_method" not in params
+# ---------------------------------------------------------------------------
+# Dispatch + cache identity for a kept transform suffix
+# ---------------------------------------------------------------------------
+
+def test_fred_contract_keys_on_a_kept_transform_suffix() -> None:
+    intent = _intent("FRED", "CPIAUCSL yoy", ["CPI"], {})
+    levels = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL"})
+    yoy = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL", "seriesId": "cpiaucsl:pc1"})
+    other = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL", "seriesId": "PPIACO:pc1"})
+    assert "transform" not in levels
+    assert yoy["transform"] == "pc1" and yoy != levels
+    # A seriesId naming a DIFFERENT series is dropped at dispatch, so it must
+    # not change the cache identity either.
+    assert other == levels
 
 
-def test_fred_native_frequency_request_only_aggregates_toward_coarser() -> None:
-    fred = FREDProvider.__new__(FREDProvider)
-    daily = {"id": "DGS10", "frequency": "Daily", "frequency_short": "D"}
-    quarterly = {"id": "GDP", "frequency": "Quarterly", "frequency_short": "Q"}
+@pytest.mark.parametrize(
+    "series_id,sent",
+    [("CPIAUCSL:pc1", "CPIAUCSL:pc1"), ("cpiaucsl:pc1", "CPIAUCSL:pc1"),
+     ("CPIAUCSL", "CPIAUCSL"), ("PPIACO", None)],
+)
+def test_fred_dispatch_keeps_only_a_same_series_series_id(series_id, sent) -> None:
+    captured: Dict[str, Any] = {}
 
-    agg, note = fred._native_frequency_request({"frequency": "monthly", "aggregation_method": "avg"}, daily)
-    assert agg == {"frequency": "m", "aggregation_method": "avg"}
-    assert "DGS10" in note and "avg" in note
+    async def _fetch_series(fred_params):
+        captured.update(fred_params)
+        return NormalizedData(
+            metadata=Metadata(source="FRED", indicator="CPI", frequency="monthly", unit="Index",
+                              seriesId="CPIAUCSL"),
+            data=[],
+        )
 
-    # Finer than native: never sent to FRED (HTTP 400) — native data + note.
-    agg, note = fred._native_frequency_request({"frequency": "monthly", "aggregation_method": "avg"}, quarterly)
-    assert agg is None and "quarterly" in note
+    svc = SimpleNamespace(fred_provider=SimpleNamespace(fetch_series=_fetch_series))
+    params = {"indicator": "CPIAUCSL", "seriesId": series_id, "country": "US"}
+    plan = SimpleNamespace(provider="FRED", params=params, provider_request={"series_id": "CPIAUCSL"})
+    intent = _intent("FRED", "CPI", ["CPI"], params)
+    with patch.object(data_fetcher, "_assert_provider_map_authority", lambda *a, **k: None):
+        asyncio.run(data_fetcher.fetch_from_provider_dispatch(svc, intent, plan))
+    assert captured["indicator"] == "CPIAUCSL"
+    # A different series is dropped (it would override the resolution); the
+    # same series is sent in the resolved spelling with its transform intact.
+    assert captured.get("seriesId") == sent
 
-    # Not opted in by the exact-code lock: byte-identical to before.
-    assert fred._native_frequency_request({"frequency": "monthly"}, daily) == (None, None)
 
+# ---------------------------------------------------------------------------
+# Prefetch clarification must not pre-empt an unambiguous named code
+# ---------------------------------------------------------------------------
+
+def test_prefetch_menu_is_skipped_for_a_lockable_named_code() -> None:
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("prefetch selector ran for an unambiguous named code")
+
+    svc = _svc()
+    svc._select_indicator_query_for_resolution = _must_not_run
+    intent = _intent("FRED", "US T10YIE latest", ["10-year Treasury yield"], {"seriesId": "T10YIE"})
+    with patch.object(ir, "_catalog_series_entry", side_effect=_fake_catalog):
+        result = asyncio.run(build_prefetch_indicator_choice_clarification(
+            svc, "conv", intent.originalQuery, intent, None, False,
+        ))
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# FRED existence check
+# ---------------------------------------------------------------------------
 
 def test_fred_lookup_series_info_distinguishes_missing_from_unanswered() -> None:
     fred = FREDProvider.__new__(FREDProvider)
@@ -312,8 +444,28 @@ def test_fred_lookup_series_info_distinguishes_missing_from_unanswered() -> None
         (_resp(400, {"error_message": "Bad Request.  api_key is not registered."}), ("unverified", None)),
     ]
     for response, expected in cases:
+        fred._series_existence_memo = {}
         fred._get_with_retry = AsyncMock(return_value=response)
         assert asyncio.run(fred.lookup_series_info("WPSFD4")) == expected
 
+    fred._series_existence_memo = {}
     fred._get_with_retry = AsyncMock(side_effect=RuntimeError("429 cooldown"))
     assert asyncio.run(fred.lookup_series_info("WPSFD4")) == ("unverified", None)
+
+
+def test_fred_lookup_series_info_memoizes_only_definitive_answers() -> None:
+    fred = FREDProvider.__new__(FREDProvider)
+    fred.base_url = "https://api.stlouisfed.org/fred"
+    fred.api_key = "k"
+    fred._series_existence_memo = {}
+
+    # A transport failure is retried on the next call, never remembered.
+    fred._get_with_retry = AsyncMock(side_effect=RuntimeError("timeout"))
+    assert asyncio.run(fred.lookup_series_info("WPSFD4")) == ("unverified", None)
+    fred._get_with_retry = AsyncMock(
+        return_value=SimpleNamespace(status_code=200, json=lambda: {"seriess": [{"id": "WPSFD4"}]})
+    )
+    assert asyncio.run(fred.lookup_series_info("wpsfd4")) == ("found", {"id": "WPSFD4"})
+    # The definitive answer is reused by later resolution passes (one call).
+    assert asyncio.run(fred.lookup_series_info("WPSFD4")) == ("found", {"id": "WPSFD4"})
+    assert fred._get_with_retry.await_count == 1

@@ -42,6 +42,11 @@ _NEGATED_AND_MULTILINGUAL = [
     ("以太坊成交量", "volume", ["trading volume"], "volume"),
     ("比特币价格，不要市值", "price", ["price"], "price"),
     ("bitcoin 24h change, not the price", "price_change", ["price change"], "24h_change"),
+    # The measure lives ONLY in the enum (indicators carry just the coin):
+    # the old English substring rule served PRICE for every one of these.
+    ("比特币市值", "market_cap", ["bitcoin"], "market_cap"),
+    ("以太坊成交量", "volume", ["ethereum"], "volume"),
+    ("狗狗币24小时涨跌幅", "price_change", ["dogecoin"], "24h_change"),
 ]
 
 
@@ -53,7 +58,10 @@ def test_current_metric_follows_enum_not_raw_text(query, metric, indicators, exp
     assert provider.simple_calls == [{"coin_ids": ["bitcoin"], "vs_currency": "usd", "metric": expected}]
 
 
-@pytest.mark.parametrize("query,metric,indicators,expected", _NEGATED_AND_MULTILINGUAL[:5])
+@pytest.mark.parametrize(
+    "query,metric,indicators,expected",
+    [row for row in _NEGATED_AND_MULTILINGUAL if row[1] != "price_change"],
+)
 def test_historical_metric_follows_enum_not_raw_text(query, metric, indicators, expected) -> None:
     provider = _FakeCoinGeckoProvider()
     params = {
@@ -72,6 +80,12 @@ def test_indicator_label_fallback_is_exact_equality_never_substring() -> None:
     # ...but only by exact normalized equality: a free-text label never matches.
     assert _coingecko_requested_metric(_intent("q", ["price not market cap"], {}), {}) == "price"
     assert _coingecko_requested_metric(_intent("q", ["bitcoin market cap"], {}), {}) == "price"
+    # Provider-vocabulary spellings (CoinGecko field names / long forms) are
+    # exact members too — still equality, never substring.
+    assert _coingecko_requested_metric(_intent("q", ["market capitalization"], {}), {}) == "market_cap"
+    assert _coingecko_requested_metric(_intent("q", ["total_volume"], {}), {}) == "volume"
+    assert _coingecko_requested_metric(_intent("q", ["current price"], {}), {}) == "price"
+    assert _coingecko_requested_metric(_intent("q", ["circulating market cap"], {}), {}) == "price"
     # Invalid enum values fall through to the labels, then to price.
     assert _coingecko_requested_metric(_intent("q", ["volume"], {}), {"metric": "tvl"}) == "volume"
     assert _coingecko_requested_metric(_intent("q", ["bitcoin"], {}), {"metric": None}) == "price"
@@ -92,6 +106,7 @@ def test_raw_text_alone_never_selects_the_measure() -> None:
     [
         ("top 10 coins by market cap", "market_cap", "market_cap_desc"),
         ("top 10 coins by 24h volume", "volume", "volume_desc"),
+        # Chinese MEASURE (via the enum) with the English "top 10" trigger.
         ("市值前十的加密货币 top 10", "market_cap", "market_cap_desc"),
     ],
 )
@@ -101,6 +116,26 @@ def test_ranking_uses_enum_measure_with_native_order(query, metric, order) -> No
     run(fetch_from_coingecko(provider, _intent(query, ["cryptocurrency ranking"], params), params))
     assert provider.market_calls == [{"vs_currency": "usd", "order": order, "per_page": 10}]
     assert provider.simple_calls == []
+
+
+def test_chinese_only_ranking_cue_is_a_known_limitation() -> None:
+    """KNOWN LIMITATION (pinned, deferred): the ranking TRIGGER is still the
+    pre-existing English cue list, so "市值前十" alone does not rank even though
+    the enum carries the measure. Moving the trigger into the parse schema is
+    a separate item; this pin keeps the gap visible."""
+    provider = _FakeCoinGeckoProvider()
+    params = {"vsCurrency": "usd", "metric": "market_cap"}
+    run(fetch_from_coingecko(provider, _intent("市值前十的加密货币", ["cryptocurrency"], params), params))
+    assert provider.market_calls == []
+
+
+def test_eurostat_contract_never_turns_the_crypto_metric_into_a_dimension_filter() -> None:
+    intent = ParsedIntent(apiProvider="Eurostat", indicators=["house prices"],
+                          parameters={}, clarificationNeeded=False, originalQuery="euro area house prices")
+    contract = _provider_request_contract(
+        "EUROSTAT", intent, {"indicator": "prc_hpi_q", "metric": "price", "unit": "I15_Q"},
+    )
+    assert contract["filters"] == {"unit": "I15_Q"}
 
 
 def test_historical_price_change_falls_back_to_price_with_disclosure() -> None:

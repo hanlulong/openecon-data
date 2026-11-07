@@ -2234,21 +2234,25 @@ _SINGLE_SERIES_CODE_PROVIDERS: Dict[str, str] = {
     "IMF": "IMF",
 }
 
-# Decisions a parsed seriesId must never override: an explicit clarification
-# choice / exact user lock, a verified prior-turn code, a post-fetch judge
-# re-resolution, or an option-validation pin. A plain selector pick
-# (``llm_adjudication``, e.g. minted by the prefetch stage) and an
-# authority-less parser value ARE overridable — the user's own literal code
-# outranks the component that guessed.
+# Decisions a parsed seriesId must never override: a verified prior-turn code,
+# a post-fetch judge re-resolution, an option-validation pin, or an
+# ``exact_user_input`` decision that is NOT a literal-code lock (i.e. the
+# user's own clarification choice, ``__decision_source="user_choice"``). A
+# plain selector pick (``llm_adjudication``, e.g. minted by the prefetch stage),
+# an authority-less parser value, and a literal-code lock of the INDICATOR slot
+# (``exact_code``) ARE overridable — the parse's dedicated seriesId slot is its
+# answer to "which code does the user want" ("WPSFD4 (not PPIACO)" can leave
+# the rejected code in the indicator slot, where the literal path locks it).
 _SERIES_ID_PROTECTED_AUTHORITIES = frozenset({
-    "exact_user_input",
     "verified_conversation_state",
     "post_fetch_semantic_judge",
     "option_validation",
 })
+_LITERAL_CODE_DECISION_SOURCE = "exact_code"
 
 REQUESTED_SERIES_ID_KEY = "__requested_series_id"
 REQUESTED_SERIES_ID_STATUS_KEY = "__requested_series_id_status"
+REQUESTED_SERIES_PROVIDER_KEY = "__requested_series_provider"
 
 
 def _parsed_series_id_code(params: dict) -> str:
@@ -2277,19 +2281,21 @@ def _catalog_series_entry(catalog_provider: str, code: str) -> Optional[Dict[str
 
 async def _named_series_code_existence(
     svc: Any, provider: str, catalog_provider: str, code: str,
-) -> Tuple[str, str, Optional[Dict[str, Any]]]:
-    """Return (status, canonical_code, metadata) for a user-named code.
+) -> Tuple[str, str]:
+    """Return (status, canonical_code) for a user-named code.
 
     status is ``found`` / ``not_found`` / ``unverified``. Catalog first; FRED
     codes absent from the (subset) catalog are checked against FRED's own
-    /series endpoint, which answers definitively. Any non-definitive outcome is
-    ``unverified`` — never lock, never claim "not found" on a transport error.
+    /series endpoint, which answers definitively (memoized per provider, so
+    the several resolution passes of one request cost one call). Any
+    non-definitive outcome is ``unverified`` — never lock, never claim "not
+    found" on a transport error.
     """
     entry = _catalog_series_entry(catalog_provider, code)
     if entry:
         if provider == "IMF" and not _imf_catalog_entry_supports_exact_code(code, entry):
-            return "unverified", code, None
-        return "found", str(entry.get("code") or code), entry
+            return "unverified", code
+        return "found", str(entry.get("code") or code)
     if provider == "FRED":
         lookup = getattr(getattr(svc, "fred_provider", None), "lookup_series_info", None)
         if callable(lookup):
@@ -2297,35 +2303,27 @@ async def _named_series_code_existence(
                 status, info = await lookup(code)
             except Exception as exc:
                 logger.debug("FRED series-existence check failed for %s: %s", code, exc)
-                return "unverified", code, None
+                return "unverified", code
             if status == "found" and info:
-                return "found", str(info.get("id") or code.upper()), info
+                return "found", str(info.get("id") or code.upper())
             if status == "not_found":
-                return "not_found", code, None
-    return "unverified", code, None
+                return "not_found", code
+    return "unverified", code
 
 
-def _requested_frequency_for_named_fred_code(
-    original_query: str, series_metadata: Optional[Dict[str, Any]],
-) -> Optional[str]:
-    """Single requested frequency that differs from the named code's native one.
-
-    Reuses the selector's structural frequency extractor (the same one this
-    module already applies to raw user text) — no new keyword list. Returns
-    None when zero or several frequencies are requested, or when the request
-    already matches the native frequency (cache identity stays unchanged).
+def _canonicalize_series_id_slot(params: dict, canonical_code: str) -> None:
+    """Rewrite the seriesId slot's BASE code to the canonical (provider-cased)
+    code, keeping any ``:transform`` suffix. Dispatch keeps a seriesId only
+    when its base equals the resolved indicator, so a lowercase user code with
+    a transform ("cpiaucsl:pc1") must not lose the transform to a case diff.
     """
-    try:
-        from .indicator_selector import _extract_requested_frequencies, _frequency_matches
-    except Exception:
-        return None
-    requested = _extract_requested_frequencies(original_query or "")
-    if len(requested) != 1:
-        return None
-    native = str((series_metadata or {}).get("frequency") or "").strip()
-    if native and _frequency_matches(requested, native):
-        return None
-    return next(iter(requested))
+    for key in ("seriesId", "series_id"):
+        raw = str(params.get(key) or "").strip()
+        if not raw:
+            continue
+        base, sep, suffix = raw.partition(":")
+        if base.strip().upper() == canonical_code.upper() and base.strip() != canonical_code:
+            params[key] = f"{canonical_code}{sep}{suffix}" if sep else canonical_code
 
 
 def _clear_stale_requested_series_stamp(params: dict, intent: ParsedIntent) -> None:
@@ -2334,6 +2332,7 @@ def _clear_stale_requested_series_stamp(params: dict, intent: ParsedIntent) -> N
     if stamped and not _exact_provider_code_literal_present(stamped, str(intent.originalQuery or "")):
         params.pop(REQUESTED_SERIES_ID_KEY, None)
         params.pop(REQUESTED_SERIES_ID_STATUS_KEY, None)
+        params.pop(REQUESTED_SERIES_PROVIDER_KEY, None)
 
 
 async def _literal_series_id_request(
@@ -2346,8 +2345,8 @@ async def _literal_series_id_request(
     only checks that the code is code-shaped, literally present in the CURRENT
     turn's raw text (never a carried resolvedQuery/session value), not already
     proven dead this turn, and exists. Returns None when the slot is not an
-    explicit user request at all; otherwise a dict with ``code``, ``status``
-    (lock / not_found / unverified / excluded / protected) and ``metadata``.
+    explicit user request at all; otherwise a dict with ``code`` and
+    ``status`` (lock / not_found / unverified / excluded / protected).
     """
     catalog_provider = _SINGLE_SERIES_CODE_PROVIDERS.get(provider)
     if not catalog_provider:
@@ -2368,7 +2367,7 @@ async def _literal_series_id_request(
     if not _exact_provider_code_literal_present(code, str(intent.originalQuery or "")):
         return None
 
-    request: Dict[str, Any] = {"code": code, "metadata": None}
+    request: Dict[str, Any] = {"code": code}
     excluded = {
         str(c).strip().upper()
         for c in (params.get("__exclude_indicator_codes") or [])
@@ -2382,18 +2381,25 @@ async def _literal_series_id_request(
 
     existing_indicator = str(params.get("indicator") or "").strip()
     existing_authority = str(params.get("__semantic_authority") or "").strip()
+    existing_is_users_choice = (
+        existing_authority == "exact_user_input"
+        and str(params.get("__decision_source") or "").strip() != _LITERAL_CODE_DECISION_SOURCE
+    )
     if (
         existing_indicator
         and existing_indicator.upper() != code.upper()
-        and (existing_authority in _SERIES_ID_PROTECTED_AUTHORITIES or is_exact_match_locked(params))
+        and (
+            existing_authority in _SERIES_ID_PROTECTED_AUTHORITIES
+            or existing_is_users_choice
+            or is_exact_match_locked(params)
+        )
     ):
         request["status"] = "protected"
         return request
 
-    status, canonical_code, metadata = await _named_series_code_existence(
+    status, canonical_code = await _named_series_code_existence(
         svc, provider, catalog_provider, code,
     )
-    request["metadata"] = metadata
     if status == "found":
         request["code"] = canonical_code
         request["status"] = "lock"
@@ -2945,26 +2951,24 @@ async def resolve_indicator_for_fetch(
             provider,
             _locked_code,
         )
-        _lock_extra: Dict[str, Any] = {}
-        if provider == "FRED":
-            _freq = _requested_frequency_for_named_fred_code(
-                str(intent.originalQuery or ""), _series_request.get("metadata"),
-            )
-            if _freq:
-                # Provider-native aggregation of the NAMED code (FRED's own
-                # frequency/aggregation_method; FRED's default method is avg)
-                # instead of handing the decision back to the selector that
-                # mis-picked. Both keys enter the provider_request contract,
-                # so the cache identity distinguishes daily vs aggregated.
-                _lock_extra = {"frequency": _freq, "aggregation_method": "avg"}
+        # Served at the code's NATIVE frequency. Forcing FRED-native
+        # aggregation from raw-text frequency words misread maturities
+        # ("3-Month"), rate units ("annual rate"), transforms ("year over
+        # year") and windows ("for the year 2025") as frequency requests; that
+        # decision needs a structured parse slot (deferred), not a keyword
+        # extractor driving a hard data transform.
         params = _apply_indicator_with_semantic_label(
             _locked_code,
             __semantic_authority="exact_user_input",
             __decision_source="exact_code",
-            **_lock_extra,
         )
-        params.pop(REQUESTED_SERIES_ID_KEY, None)
-        params.pop(REQUESTED_SERIES_ID_STATUS_KEY, None)
+        _canonicalize_series_id_slot(params, _locked_code)
+        # Keep the stamp on a lock too: if the locked code later fails and a
+        # cross-provider fallback serves something else, the fetch layer can
+        # still say so (it is silent when the served code IS the request).
+        params[REQUESTED_SERIES_ID_KEY] = _locked_code
+        params[REQUESTED_SERIES_ID_STATUS_KEY] = "lock"
+        params[REQUESTED_SERIES_PROVIDER_KEY] = provider
         intent.parameters = params
         return params
     if _series_request:
@@ -2973,6 +2977,7 @@ async def resolve_indicator_for_fetch(
         # fetch layer discloses if the served code differs from the request.
         params[REQUESTED_SERIES_ID_KEY] = str(_series_request["code"])
         params[REQUESTED_SERIES_ID_STATUS_KEY] = str(_series_request.get("status") or "")
+        params[REQUESTED_SERIES_PROVIDER_KEY] = provider
         intent.parameters = params
 
     existing_indicator = str(params.get("indicator") or "").strip()

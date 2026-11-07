@@ -515,6 +515,11 @@ class ConversationState(BaseModel):
     # --- Crypto-specific fields ---
     coin_ids: Optional[List[str]] = None
     vs_currency: Optional[str] = None
+    # The parse's CoinGecko measure enum (parameters.metric: price |
+    # market_cap | volume | price_change). Carried so a time/currency-only
+    # follow-up keeps the measure the user asked for; cleared with the other
+    # crypto/indicator-scoped fields on an indicator or provider change.
+    crypto_metric: Optional[str] = None
 
     # --- Response language (Proposal C) ---
     # ISO 639-1 language of the conversation, carried across turns so a follow-up
@@ -699,6 +704,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         merged.coin_ids = None
+        merged.crypto_metric = None
         if str(delta.changed_indicator).strip().lower() in {"trade balance", "total trade"} and delta.changed_trade_flow is None:
             merged.trade_flow = None
         if not delta.is_dimension_modifier_change:
@@ -861,6 +867,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.base_indicator = None
         merged.dimensions = None
         merged.coin_ids = None
+        merged.crypto_metric = None
 
     # --- Time ---
     if delta.changed_start_date:
@@ -1009,6 +1016,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["coinIds"] = state.coin_ids
     if state.vs_currency:
         parameters["vsCurrency"] = state.vs_currency
+    if state.crypto_metric:
+        parameters["metric"] = state.crypto_metric
     if (
         not parameters.get("coinIds")
         and (state.provider or state.routed_provider or "").upper() == "COINGECKO"
@@ -1231,6 +1240,13 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # Crypto
     coin_ids = params.get("coinIds")
     vs_currency = params.get("vsCurrency")
+    # Stored only for CoinGecko intents (the slot is crypto-scoped); the
+    # fetch layer validates the value against the enum.
+    crypto_metric = (
+        str(params.get("metric") or "").strip() or None
+        if provider_name == "COINGECKO"
+        else None
+    )
 
     # Dimensions (from delta/merge path via __dimensions)
     dimensions, decomposition_from_dimensions, _ = _interpret_dimension_breakdown(
@@ -1348,6 +1364,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         trade_commodity=trade_commodity,
         coin_ids=coin_ids,
         vs_currency=vs_currency,
+        crypto_metric=crypto_metric,
         decomposition=decomposition,
         chart_type=intent.recommendedChartType,
     )

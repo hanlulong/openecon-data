@@ -539,6 +539,36 @@ class TestMergeState:
         merged = merge_state(state, FollowUpDelta(changed_indicator="inflation rate"))
         assert merged.coin_ids is None
 
+    def test_crypto_metric_survives_time_followup_and_clears_on_indicator_change(self):
+        state = ConversationState(
+            indicator="bitcoin",
+            coin_ids=["bitcoin"],
+            provider="COINGECKO",
+            crypto_metric="market_cap",
+        )
+        kept = merge_state(state, FollowUpDelta(changed_start_date="2025-01-01"))
+        assert kept.crypto_metric == "market_cap"
+        assert materialize_intent(kept).parameters["metric"] == "market_cap"
+
+        switched = merge_state(state, FollowUpDelta(changed_indicator="trading volume"))
+        assert switched.crypto_metric is None
+        assert "metric" not in materialize_intent(switched).parameters
+
+        moved = merge_state(state, FollowUpDelta(changed_provider="FRED"))
+        assert moved.crypto_metric is None
+
+    def test_crypto_metric_is_extracted_only_for_coingecko_intents(self):
+        crypto = ParsedIntent(
+            apiProvider="CoinGecko", indicators=["bitcoin"], clarificationNeeded=False,
+            parameters={"coinIds": ["bitcoin"], "metric": "volume"}, originalQuery="比特币成交量",
+        )
+        assert extract_state_from_intent(crypto).crypto_metric == "volume"
+        other = ParsedIntent(
+            apiProvider="Eurostat", indicators=["house prices"], clarificationNeeded=False,
+            parameters={"metric": "price"}, originalQuery="euro area house prices",
+        )
+        assert extract_state_from_intent(other).crypto_metric is None
+
     def test_additive_crypto_indicators_merge_coin_ids(self):
         state = ConversationState(
             indicator="bitcoin price",

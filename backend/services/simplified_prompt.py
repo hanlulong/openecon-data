@@ -105,7 +105,7 @@ Important constraints:
   copied from the user's intent, never provider-native IDs/codes unless the user explicitly
   supplied that exact code.
 - parameters.seriesId: ONE provider-native code the user literally typed, copied verbatim (several: list them
-  in indicators); never a description, null for concepts, never a code the user rejects ("WPSFD4, not PPIACO" -> "WPSFD4").
+  in indicators); never a description, null for concepts, never a code the user rejects ("CPILFESL, not CPIAUCSL" -> "CPILFESL").
 - parameters.metric (crypto only, else null): price|market_cap|volume|price_change = the measure the user WANTS,
   in any language or negation ("prices, not market caps" -> "price"; "比特币市值" -> "market_cap").
 - The indicators array MUST use English canonical metric names, translating the concept when the user wrote another language (e.g. "失业率" -> ["unemployment rate"], "浙江GDP" -> ["GDP"]). This array is the English-language search key used to look the metric up. Never alter the metric's meaning; the user's original wording is preserved elsewhere for display.
@@ -226,7 +226,7 @@ Output schema (all keys required unless noted null):
     "commodity": "...",
     "flow": "IMPORT|EXPORT|BOTH",
     "coinIds": ["..."],
-    "metric": "price|market_cap|volume|price_change",
+    "metric": "price|market_cap|volume|price_change (crypto only, else null)",
     "vsCurrency": "...",
     "baseCurrency": "...",
     "targetCurrency": "..."

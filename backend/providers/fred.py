@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
@@ -226,6 +227,11 @@ class FREDProvider(BaseProvider):
         self.metadata_search = metadata_search_service  # Optional: for future integration
         # Cache for dynamic series search results to avoid redundant API calls
         self._search_cache: Dict[str, str] = {}
+        # Definitive series-existence answers (found / not_found) from
+        # lookup_series_info, keyed by upper-cased code with a monotonic
+        # timestamp. One request can resolve the same user-named code several
+        # times (pre-resolve, fetch, retries); this keeps that to one call.
+        self._series_existence_memo: Dict[str, Tuple[float, str, Optional[Dict[str, Any]]]] = {}
 
     async def _fetch_data(self, **params) -> NormalizedData | list[NormalizedData]:
         """Implementation of BaseProvider's abstract method.
@@ -578,61 +584,10 @@ class FREDProvider(BaseProvider):
     def _map_frequency(self, fred_frequency: str) -> str:
         return self.FREQUENCY_MAP.get(fred_frequency, fred_frequency.lower())
 
-    # FRED's documented ``frequency`` request values, finest -> coarsest. The
-    # observations endpoint aggregates natively ONLY toward a coarser
-    # frequency; asking for a finer one is an HTTP 400.
-    _FRED_FREQUENCY_ORDER: Tuple[str, ...] = ("d", "w", "bw", "m", "q", "sa", "a")
-    _CANONICAL_TO_FRED_FREQUENCY: Dict[str, str] = {
-        "daily": "d",
-        "weekly": "w",
-        "biweekly": "bw",
-        "monthly": "m",
-        "quarterly": "q",
-        "semiannual": "sa",
-        "annual": "a",
-    }
-    _FRED_AGGREGATION_METHODS = frozenset({"avg", "sum", "eop"})
-
-    def _native_frequency_request(
-        self, params: Dict[str, Any], info: Dict[str, Any]
-    ) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
-        """Return (FRED native aggregation params, disclosure note).
-
-        Only acts when the caller set BOTH ``frequency`` and
-        ``aggregation_method`` (the exact-user-code lock does this; nothing
-        else does), so every other FRED fetch is byte-identical. Structural
-        API-parameter legality only: aggregate when the requested frequency is
-        strictly coarser than the series' native one; when it is finer, serve
-        native data and say so (FRED cannot disaggregate).
-        """
-        method = str(params.get("aggregation_method") or "").strip().lower()
-        requested = self._CANONICAL_TO_FRED_FREQUENCY.get(
-            str(params.get("frequency") or "").strip().lower()
-        )
-        native = str(info.get("frequency_short") or "").strip().lower()
-        if (
-            method not in self._FRED_AGGREGATION_METHODS
-            or not requested
-            or native not in self._FRED_FREQUENCY_ORDER
-        ):
-            return None, None
-        series_code = str(info.get("id") or "").strip() or "this series"
-        native_label = str(info.get("frequency") or native).strip().lower()
-        requested_label = str(params.get("frequency")).strip().lower()
-        order = self._FRED_FREQUENCY_ORDER
-        if order.index(requested) > order.index(native):
-            return (
-                {"frequency": requested, "aggregation_method": method},
-                f"{series_code} is published {native_label}; shown as {requested_label} "
-                f"values aggregated natively by FRED (aggregation method: {method}).",
-            )
-        if order.index(requested) < order.index(native):
-            return (
-                None,
-                f"{series_code} is published only {native_label}; FRED cannot provide "
-                f"it at {requested_label} frequency, so native {native_label} values are shown.",
-            )
-        return None, None
+    # Existence of a FRED series id is stable; transport failures
+    # ("unverified") are never memoized.
+    _SERIES_EXISTENCE_TTL_SECONDS = 3600.0
+    _SERIES_EXISTENCE_MEMO_MAX = 512
 
     async def lookup_series_info(self, series_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Check whether ``series_id`` exists on FRED.
@@ -647,6 +602,20 @@ class FREDProvider(BaseProvider):
         code = str(series_id or "").strip().upper()
         if not code:
             return "unverified", None
+        memo = getattr(self, "_series_existence_memo", None)
+        if memo is None:
+            memo = self._series_existence_memo = {}
+        cached = memo.get(code)
+        if cached and time.monotonic() - cached[0] < self._SERIES_EXISTENCE_TTL_SECONDS:
+            return cached[1], cached[2]
+        status, info = await self._lookup_series_info_uncached(code)
+        if status in {"found", "not_found"}:
+            if len(memo) >= self._SERIES_EXISTENCE_MEMO_MAX:
+                memo.pop(next(iter(memo)), None)
+            memo[code] = (time.monotonic(), status, info)
+        return status, info
+
+    async def _lookup_series_info_uncached(self, code: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         try:
             response = await self._get_with_retry(
                 get_http_client(),
@@ -723,9 +692,6 @@ class FREDProvider(BaseProvider):
         # Add transformation if specified (e.g., 'pc1' for percent change from year ago)
         if transformation:
             obs_params["units"] = transformation
-        native_frequency_params, frequency_note = self._native_frequency_request(params, info)
-        if native_frequency_params:
-            obs_params.update(native_frequency_params)
 
         obs_response = await self._get_with_retry(
             client,
@@ -757,8 +723,6 @@ class FREDProvider(BaseProvider):
             }
             if transformation:
                 obs_params["units"] = transformation
-            if native_frequency_params:
-                obs_params.update(native_frequency_params)
             obs_response = await self._get_with_retry(
                 client,
                 f"{self.base_url}/series/observations",
@@ -869,11 +833,7 @@ class FREDProvider(BaseProvider):
             source="FRED",
             indicator=info["title"],
             country=inferred_country,
-            frequency=(
-                str(params.get("frequency")).strip().lower()
-                if native_frequency_params
-                else self._map_frequency(info["frequency"])
-            ),
+            frequency=self._map_frequency(info["frequency"]),
             unit=unit,
             lastUpdated=info.get("last_updated", ""),
             seriesId=target_series,
@@ -885,9 +845,6 @@ class FREDProvider(BaseProvider):
             priceType=price_type,
             description=description,
             about=about,
-            # The native-aggregation disclosure is a transparency note (the
-            # channel FRED prose no longer uses); ordinary fetches keep notes empty.
-            notes=[frequency_note] if frequency_note else None,
             startDate=info.get("observation_start"),
             endDate=info.get("observation_end"),
         )

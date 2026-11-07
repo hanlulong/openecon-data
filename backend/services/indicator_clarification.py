@@ -2889,6 +2889,23 @@ async def build_prefetch_indicator_choice_clarification(
     if intent.indicators and len(intent.indicators) > 1:
         return None
 
+    # A provider code the user literally named in this turn and that exists at
+    # the routed provider is unambiguous: resolution locks it (the seriesId
+    # explicit-code authority), so a pre-fetch menu here would be a redundant
+    # ask on an unambiguous query. Same structural predicate, evaluated
+    # read-only on a copy of the params.
+    try:
+        from .indicator_resolution import _literal_series_id_request
+
+        _named_code = await _literal_series_id_request(
+            qs, provider_upper, intent, dict(intent.parameters or {}),
+        )
+    except Exception as exc:
+        logger.debug("prefetch named-code check skipped: %s", exc)
+        _named_code = None
+    if _named_code and _named_code.get("status") == "lock":
+        return None
+
     params = dict(intent.parameters or {})
     query_text = str(query or "").strip()
     # A dimension-DECOMPOSITION query whose axis is already resolved has its

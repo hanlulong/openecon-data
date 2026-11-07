@@ -453,12 +453,24 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         ),
         "zh": "未找到您指定的序列代码 {requested}；以下显示最接近的可用序列 {served}。",
     },
+    "requested_series_unverified": {
+        "en": (
+            "The series code you named, {requested}, could not be verified at the "
+            "provider right now; showing {served} instead."
+        ),
+        "zh": "暂时无法在数据源处核实您指定的序列代码 {requested}；以下显示的是 {served}。",
+    },
     "requested_series_substituted": {
         "en": (
             "You asked for series {requested}, but it could not be served for this "
             "request; showing {served} instead."
         ),
         "zh": "您指定的序列 {requested} 无法用于本次请求；以下显示的是 {served}。",
+    },
+    # Placeholder for {served} when the served series carries no code/label.
+    "requested_series_served_fallback": {
+        "en": "the closest available series",
+        "zh": "最接近的可用序列",
     },
 }
 

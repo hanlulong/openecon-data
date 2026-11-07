@@ -225,6 +225,28 @@ def test_imf_sdmx_exact_candidate_helpers_do_not_use_label_semantics() -> None:
     assert "import" not in combined.lower()
     assert "producer price" not in combined.lower()
 
+def test_coingecko_measure_selection_never_reads_raw_query_text() -> None:
+    """The CoinGecko measure (price / market cap / volume / change) is the parse
+    enum, then exact label equality — never a substring rule over the raw query
+    text (that rule served market caps for "prices not market caps")."""
+    import ast
+
+    from backend.services import data_fetcher
+
+    decision_source = "\n".join(
+        inspect.getsource(fn)
+        for fn in (data_fetcher._coingecko_requested_metric, data_fetcher._coingecko_enum_member)
+    )
+    identifiers = {
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(ast.parse(decision_source))
+        if isinstance(node, (ast.Name, ast.Attribute))
+    }
+    assert not identifiers & {"query", "query_lower", "originalQuery", "resolvedQuery"}
+    # The combined indicators+raw-text measure string is gone from the fetch.
+    assert "metric_text" not in inspect.getsource(data_fetcher.fetch_from_coingecko)
+
+
 def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority() -> None:
     """Rule plausibility guards may fail closed, but must not create final authority."""
 

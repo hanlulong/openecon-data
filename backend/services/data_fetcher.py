@@ -335,6 +335,31 @@ def _restore_semantic_indicator_label_for_generic_metadata(
             metadata.indicator = semantic_label
 
 
+def _fred_series_id_base_matches(series_id: Any, indicator: Any) -> bool:
+    """True when a FRED seriesId names the SAME series as the resolved
+    indicator, ignoring a ``:transform`` suffix and letter case."""
+    base = str(series_id or "").strip().split(":", 1)[0].strip().upper()
+    return bool(base) and base == str(indicator or "").strip().upper()
+
+
+def _fred_kept_series_transform(params: dict, code: Any) -> Optional[str]:
+    """The ``:transform`` suffix of a seriesId that FRED dispatch KEEPS (its
+    base equals the resolved code). Dispatch and the provider_request contract
+    share this so a year-over-year (``:pc1``) payload never shares a cache key
+    with the levels payload of the same code."""
+    for key in ("seriesId", "series_id"):
+        raw = str((params or {}).get(key) or "").strip()
+        if ":" in raw and _fred_series_id_base_matches(raw, code):
+            suffix = raw.split(":", 1)[1].strip().lower()
+            if suffix:
+                return suffix
+    return None
+
+
+def _normalized_source_key(value: Any) -> str:
+    return re.sub(r"[\s_\-]+", "", str(value or "").strip().upper())
+
+
 def _attach_requested_series_disclosure(
     result: List[NormalizedData],
     params: dict,
@@ -342,34 +367,53 @@ def _attach_requested_series_disclosure(
 ) -> List[NormalizedData]:
     """Disclose when the code the USER named is not the code being served.
 
-    Resolution stamps ``__requested_series_id`` only for a seriesId that was
-    literally in the current turn's text but could not be locked (not found,
-    unverifiable, already dead this turn, or a protected prior decision). Every
-    seriesId drop downstream (FRED dispatch, exact-lock cleanup, country-scope
-    discovery) is therefore covered by this ONE per-request seam instead of
-    being silent. Structural comparison of provider codes only. Runs on fresh
-    AND cache-hit results and decorates COPIES, so a request-specific note is
-    never written into a shared cache entry.
+    Resolution stamps ``__requested_series_id`` for a seriesId that was
+    literally in the current turn's text: with status ``lock`` when it was
+    locked, otherwise with why it could not be (not found, unverifiable,
+    already dead this turn, or a protected prior decision). Every seriesId
+    drop downstream (FRED dispatch, exact-lock cleanup, country-scope
+    discovery, cross-provider fallback) is therefore covered by this ONE
+    per-request seam instead of being silent. Structural comparison of
+    provider codes / sources only. Runs on fresh AND cache-hit results and
+    decorates COPIES, so a request-specific note is never written into a
+    shared cache entry.
     """
     requested = str((params or {}).get("__requested_series_id") or "").strip()
     if not requested or not result:
         return result
+    status = str(params.get("__requested_series_id_status") or "").strip()
     served_codes = [
         str(getattr(getattr(series, "metadata", None), "seriesId", "") or "").strip()
         for series in result
     ]
-    if any(code.split(":", 1)[0].upper() == requested.upper() for code in served_codes if code):
+    if status == "lock":
+        # The named code WAS locked. Providers do not all echo a bare code as
+        # metadata.seriesId (dimension suffixes, composite SDMX keys), so a
+        # code comparison could raise a false alarm on a correct serve; the
+        # structural signal for "something else was served" is a different
+        # SOURCE (cross-provider fallback after the locked fetch failed).
+        locked_source = _normalized_source_key(params.get("__requested_series_provider"))
+        served_sources = {
+            _normalized_source_key(getattr(getattr(series, "metadata", None), "source", ""))
+            for series in result
+        }
+        if not locked_source or locked_source in served_sources:
+            return result
+    elif any(code.split(":", 1)[0].upper() == requested.upper() for code in served_codes if code):
         return result
+    language = getattr(intent, "language", None)
     served_label = next((code for code in served_codes if code), "") or str(
         getattr(getattr(result[0], "metadata", None), "indicator", "") or ""
     )
-    status = str(params.get("__requested_series_id_status") or "").strip()
-    message_id = "requested_series_not_found" if status == "not_found" else "requested_series_substituted"
+    message_id = {
+        "not_found": "requested_series_not_found",
+        "unverified": "requested_series_unverified",
+    }.get(status, "requested_series_substituted")
     note = _localized_message(
         message_id,
-        getattr(intent, "language", None),
+        language,
         requested=requested,
-        served=served_label or "the closest available series",
+        served=served_label or _localized_message("requested_series_served_fallback", language),
     )
     if not note:
         return result
@@ -485,21 +529,34 @@ _COINGECKO_METRIC_ENUM: Dict[str, str] = {
 }
 # Historical endpoints (market_chart / range) expose only these series.
 _COINGECKO_HISTORICAL_METRICS = frozenset({"price", "market_cap", "volume"})
+# Provider-vocabulary spellings of each enum value: the enum value itself, the
+# provider's metric parameter, and CoinGecko's own /coins/markets field names
+# (current_price, market_cap — long form "market capitalization" —,
+# total_volume, price_change_24h / price_change_percentage_24h). Compared by
+# EQUALITY after structural normalization; this is vocabulary, not a phrase
+# list over free text.
+_COINGECKO_METRIC_SPELLINGS: Dict[str, frozenset] = {
+    "price": frozenset({"price", "currentprice"}),
+    "market_cap": frozenset({"marketcap", "marketcapitalization", "marketcapitalisation"}),
+    "volume": frozenset({"volume", "totalvolume"}),
+    "price_change": frozenset({
+        "pricechange", "24hchange", "pricechange24h", "pricechangepercentage24h",
+    }),
+}
 
 
 def _coingecko_enum_member(value: Any) -> Optional[str]:
     """Exact (normalized) membership of ``value`` in the metric enum.
 
     Structural normalization only — lowercase, collapse spaces/underscores/
-    hyphens, an optional plural "s" — then EQUALITY with an enum value (or the
-    provider's own ``24h_change`` spelling). Never substring search, so a
-    label like "price not market cap" matches nothing.
+    hyphens, an optional plural "s" — then EQUALITY with one of the enum
+    value's provider-vocabulary spellings. Never substring search, so a label
+    like "price not market cap" matches nothing.
     """
     compact = re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
     if not compact:
         return None
-    for enum_value, provider_metric in _COINGECKO_METRIC_ENUM.items():
-        forms = {enum_value.replace("_", ""), provider_metric.replace("_", "")}
+    for enum_value, forms in _COINGECKO_METRIC_SPELLINGS.items():
         if compact in forms or (compact.endswith("s") and compact[:-1] in forms):
             return enum_value
     return None
@@ -656,6 +713,10 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
     if provider_norm == "FRED":
         contract["series_id"] = str(code or "").strip()
         contract["country"] = contract["country_scope"][0] if contract["country_scope"] else None
+        # Only when present, so every transform-less key is unchanged.
+        fred_transform = _fred_kept_series_transform(params, code)
+        if fred_transform:
+            contract["transform"] = fred_transform
 
     if provider_norm == "WORLDBANK":
         contract["indicator"] = str(code or "").strip()
@@ -675,6 +736,10 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
                 "endDate",
                 "start_year",
                 "end_year",
+                # CoinGecko-scoped parse slot (price|market_cap|volume|
+                # price_change), never an SDMX dimension: a stray value must
+                # not become a STRICT Eurostat member filter.
+                "metric",
             }
             and not str(key).startswith("_")
         }
@@ -2065,12 +2130,20 @@ async def fetch_from_provider_dispatch(
             # dropped here (else it silently overrides every resolution). The
             # drop is no longer SILENT for a code the user typed: resolution
             # stamps __requested_series_id and fetch_data discloses via
-            # _attach_requested_series_disclosure. Compare the BASE code so a
-            # ":pc1"-style transform on the locked code survives.
+            # _attach_requested_series_disclosure. Compare the BASE code
+            # (case-insensitively) so a ":pc1"-style transform on the locked
+            # code survives; the contract keys on it (_fred_kept_series_transform).
+            _fred_indicator = str(fred_params.get("indicator") or "").strip()
             for _sid_key in ("seriesId", "series_id"):
-                _sid = str(fred_params.get(_sid_key) or "").strip()
-                if _sid and _sid.split(":", 1)[0] != str(fred_params.get("indicator") or "").strip():
+                _sid = fred_params.get(_sid_key)
+                if not _sid:
+                    continue
+                if not _fred_series_id_base_matches(_sid, _fred_indicator):
                     fred_params.pop(_sid_key, None)
+                    continue
+                # Same series: send the resolved code's spelling + the suffix.
+                _base, _sep, _suffix = str(_sid).strip().partition(":")
+                fred_params[_sid_key] = f"{_fred_indicator}{_sep}{_suffix}" if _sep else _fred_indicator
             series = await svc.fred_provider.fetch_series(fred_params)
             _validate_fred_country_scope_result([series], fred_request, fred_params)
             return [series]
