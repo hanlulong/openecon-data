@@ -260,8 +260,11 @@ def test_catalog_question_not_captured_by_pre_parse_gates_with_auto_pro_mode(
     service: QueryService,
 ) -> None:
     """Without the old first-turn shortcut, catalog questions now pass the
-    pre-parse gates (geography-breakdown clarifier, auto Pro Mode complexity
-    analyzer, orchestrator). They must still reach the parse and the handler."""
+    pre-parse gates. A plain catalog question (no decomposition or
+    "by <region>" wording) is captured by none of them — not the auto Pro
+    Mode complexity analyzer nor the geography-breakdown clarifier — and
+    still reaches the parse and the handler. Phrasings that DO trip a gate
+    are pinned as documented debt below."""
     query = "what indicators does FRED have for housing"
     parsed = _intent(query, queryType="informational", indicators=["housing"])
 
@@ -293,6 +296,33 @@ def test_catalog_question_with_decomposition_words_beats_auto_pro_mode(
     result = _process(service, query, parsed, auto_pro_mode=True)
 
     assert result.pro.await_count == 0
+    assert result.reached_informational
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Documented debt: the geography-breakdown clarifier (a 'by province/state/"
+        "region/city/county' pattern with no named geography) runs BEFORE the parse "
+        "for every user, so a first-turn catalog question with that wording gets a "
+        "'name the country first' clarification instead of the LLM's informational "
+        "answer. It returns a clarification, never wrong data. General fix (same as "
+        "the Pro Mode gate): evaluate the semantic pre-parse gates after the parse "
+        "and skip them when the parsed queryType is 'informational' — no keyword "
+        "carve-out."
+    ),
+)
+@pytest.mark.parametrize("auto_pro_mode", [False, True])
+def test_catalog_question_with_by_region_wording_beats_geography_clarifier(
+    service: QueryService, auto_pro_mode: bool,
+) -> None:
+    query = "what data do you have by province"
+    parsed = _intent(query, queryType="informational", indicators=["provincial data"],
+                     apiProvider="WorldBank")
+
+    result = _process(service, query, parsed, auto_pro_mode=auto_pro_mode)
+
+    assert not result.response.clarificationNeeded
     assert result.reached_informational
 
 
@@ -368,20 +398,29 @@ def test_llm_indicator_count_subtype_serves_count(service: QueryService) -> None
     assert "indicator database contains" in result.response.message
 
 
-def test_llm_definition_subtype_uses_explanation_llm(service: QueryService) -> None:
-    # A method question the keyword classifier sent to indicator_search
-    # ("Found N indicators matching ...").
-    query = "explain the difference between comparative statics and dynamics"
+@pytest.mark.parametrize("query,indicators", [
+    # Method / concept questions the deleted keyword classifier sent to
+    # indicator_search ("Found N indicators matching ..."): a non-English one
+    # and an English one without its "define/explain/what does X mean" cues.
+    ("Comment interpréter le test de causalité de Granger", ["Granger causality"]),
+    ("how is the unemployment rate measured", ["unemployment rate"]),
+])
+def test_llm_definition_subtype_uses_explanation_llm(
+    service: QueryService, query: str, indicators: List[str],
+) -> None:
     generate = AsyncMock(return_value={
-        "choices": [{"message": {"content": "Comparative statics compares equilibria."}}],
+        "choices": [{"message": {"content": "A concise explanation."}}],
     })
     with patch.object(service.openrouter.llm_provider, "generate", generate):
-        result = _info_turn(service, query, "definition", indicators=["comparative statics"],
+        result = _info_turn(service, query, "definition", indicators=indicators,
                             apiProvider="WorldBank")
 
     assert generate.await_count == 1
+    # The explanation has no fetched data behind it: the model is told not
+    # to quote current figures from memory.
+    assert "Do not state specific current" in generate.await_args.kwargs["system_prompt"]
     assert not result.reached_fetch
-    assert result.response.message.startswith("Comparative statics compares equilibria.")
+    assert result.response.message.startswith("A concise explanation.")
 
 
 def test_definition_without_explanation_llm_answers_honestly_not_fetch(service: QueryService) -> None:
@@ -417,6 +456,22 @@ def test_informational_label_with_nothing_to_search_never_falls_through_to_fetch
     assert result.response.message.startswith("I have access to")
 
 
+@pytest.mark.parametrize("query", ["有哪些指标", "what indicators do you have"])
+def test_topicless_indicator_search_gets_same_overview_in_any_language(
+    service: QueryService, query: str,
+) -> None:
+    """The parse labelled the ask indicator_search but its only term is the
+    generic "indicators" (no topic, no provider named). The answer must not
+    depend on the query's language: the raw-text term stripper is a fallback
+    for placeholder intents only, so the Chinese ask no longer searches its
+    whole sentence and dead-ends with "couldn't find indicators"."""
+    result = _info_turn(service, query, "indicator_search",
+                        indicators=["indicators"], apiProvider="WorldBank")
+
+    assert not result.reached_fetch
+    assert result.response.message.startswith("I have access to")
+
+
 def test_follow_up_informational_label_carries_llm_subtype(service: QueryService) -> None:
     """Tier-2 (delta classifier LLM) dispatch: its sub-type reaches the
     handler; the main parse is not called and nothing is fetched."""
@@ -436,6 +491,65 @@ def test_follow_up_informational_label_carries_llm_subtype(service: QueryService
     assert not result.reached_fetch
     assert result.info.calls[0]["intent"].informationalSubtype == "data_sources"
     assert result.response.message.startswith("I have access to")
+
+
+def test_informational_first_turn_then_data_follow_up_reaches_fetch_with_parsed_context(
+    service: QueryService,
+) -> None:
+    """Multi-round: an informational first turn now stores the PARSED intent
+    (real topic/provider) as the last intent; a data follow-up must still be
+    decided by its own parse label and reach the data path, with the prior
+    turn's parsed topic (not an INFORMATIONAL placeholder) in its context."""
+    first_query = "what indicators does FRED have for housing"
+    first = _process(service, first_query, _intent(
+        first_query, queryType="informational", informationalSubtype="indicator_search",
+        indicators=["housing"], apiProvider="FRED",
+    ))
+    assert first.reached_informational and not first.reached_fetch
+    conv_id = first.response.conversationId
+    assert conv_id
+
+    follow_query = "show me US housing starts since 2020"
+    follow = _process(service, follow_query, _intent(
+        follow_query, queryType="data_fetch", indicators=["housing starts"],
+        parameters={"country": "US", "startDate": "2020-01-01"},
+    ), conversation_id=conv_id)
+
+    assert follow.parse.await_count == 1
+    assert not follow.reached_informational
+    assert follow.reached_fetch
+    context = follow.parse.await_args.kwargs.get("conversation_context") or {}
+    assert context.get("indicator") == "housing"
+    assert context.get("provider") == "FRED"
+
+
+def test_contract_enums_are_stated_in_both_llm_prompts() -> None:
+    """The validators coerce anything outside these enums, so every contract
+    value must be offered to the models that emit it (parse + delta)."""
+    import inspect
+
+    from backend.models import _INFORMATIONAL_SUBTYPES, _QUERY_TYPES
+    from backend.services.simplified_prompt import SimplifiedPrompt
+
+    parse_prompt = SimplifiedPrompt.generate()
+    delta_prompt_source = inspect.getsource(DeltaExtractor.extract_with_llm)
+    for value in _QUERY_TYPES:
+        assert f'"{value}"' in parse_prompt, value
+    for value in _INFORMATIONAL_SUBTYPES:
+        assert f'"{value}"' in parse_prompt, value
+        assert f'"{value}"' in delta_prompt_source, value
+    assert "informationalSubtype" in parse_prompt
+    assert "informational_subtype" in delta_prompt_source
+
+
+def test_off_contract_label_is_logged_for_drift(caplog: pytest.LogCaptureFixture) -> None:
+    base = {"apiProvider": "FRED", "indicators": ["GDP"], "clarificationNeeded": False}
+    with caplog.at_level("INFO", logger="backend.models"):
+        intent = ParsedIntent(**base, queryType="ranking", informationalSubtype="concept")
+        ParsedIntent(**base, queryType=None, informationalSubtype=None)
+    assert intent.queryType == "data_fetch" and intent.informationalSubtype is None
+    drift = [r.getMessage() for r in caplog.records if "Off-contract" in r.getMessage()]
+    assert len(drift) == 2  # only the non-empty off-contract values
 
 
 def test_informational_subtype_normalizer() -> None:

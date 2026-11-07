@@ -1003,8 +1003,9 @@ STEP 1 — CLASSIFY the query into one of these types:
 - "informational": Question about the system ("what sources do you have?")
 
 Set the query_type field accordingly. For "informational" also set informational_subtype:
-"indicator_search" (indicators for a topic/provider), "data_sources" (which providers exist),
-"indicator_count" (how many indicators), or "definition" (what a concept means / how it is measured).
+"indicator_search" (indicators for a named topic/provider: "any housing series?"), "data_sources"
+(which providers/sources you have, no topic named: "what sources do you have?"), "indicator_count"
+("how many series do you have?"), or "definition" (what a concept means / how it is measured: "what does CPI mean?").
 
 SUB-COUNTRY REGION SWITCH → new_query (IMPORTANT):
 When the follow-up names a SUB-COUNTRY region — a US state, a Canadian province,

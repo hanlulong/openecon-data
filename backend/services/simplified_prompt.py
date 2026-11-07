@@ -249,16 +249,17 @@ Output schema (all keys required unless noted null):
 
 Required formatting rules:
 - queryType: one of "data_fetch", "informational", "analysis", "comparison"
-  - "data_fetch": user wants actual data/time series (default, most queries). A request for values,
-    observations or a series over a period is data_fetch even if it says "list", "series", "source" or "API".
-  - "informational": user is asking ABOUT available data, indicators, or providers, or asks a conceptual
-    economics question with no data requested (e.g., "What GDP indicators does World Bank have?")
+  - "data_fetch": user wants actual data/time series (default, most queries). Asking for values, observations,
+    the latest reading or a series over a period, or for that series' source or API URL, is data_fetch even if
+    it says "list", "series", "source" or "API".
+  - "informational": user is asking ABOUT available data, indicators, or providers, or asks a conceptual economics
+    question with no country or time scope and no data requested (e.g., "What GDP indicators does World Bank have?")
   - "analysis": user wants complex analysis requiring code execution
   - "comparison": user wants structured comparison or ranking across entities
     (e.g., compare US and Germany GDP, highest unemployment rate across G7, top countries by inflation)
 - informationalSubtype: null unless queryType="informational"; then one of "indicator_search" (indicators/series
-  for a topic or provider), "data_sources" (which data providers exist overall), "indicator_count" (how many
-  indicators/series), "definition" (what a concept means, how it is measured, a method question)
+  for a named topic or provider), "data_sources" (which data providers/sources you have, no topic named),
+  "indicator_count" (how many indicators/series), "definition" (what a concept means, how it is measured, a method question)
 - apiProvider: string
 - indicators: non-empty array of strings (for informational queries, use search terms like ["employment indicators"])
 - parameters: object (use null values or omit unrelated keys)
@@ -298,12 +299,12 @@ Set startDate="2015-01-01", endDate="2020-12-31".
 User: "plot unemployment for all canadian provinces"
 Set needsDecomposition=true, decompositionType="provinces".
 
-User: "What GDP indicators does World Bank have?"
-Set queryType="informational", informationalSubtype="indicator_search", indicators=["GDP"], apiProvider="WorldBank".
-This is NOT a data request — user is asking about available indicators.
-
-User: "Which providers have trade data?"
-Set queryType="informational", informationalSubtype="indicator_search", indicators=["trade"] (availability, not data).
+Informational asks: set queryType="informational" (NOT a data request) and informationalSubtype:
+"What GDP indicators does World Bank have?" -> "indicator_search", indicators=["GDP"], apiProvider="WorldBank"
+"Which providers have trade data?" -> "indicator_search", indicators=["trade"] (a topic is named)
+"What sources can you pull data from?" / "你们支持哪些数据库" -> "data_sources" (no topic named)
+"How many series are in your database?" -> "indicator_count"
+"What does CPI measure?" -> "definition" (but "What is China's CPI now?" is data_fetch)
 
 User: "What's the GDP of France in 2023?"
 Set queryType="data_fetch". This IS a data request despite starting with "What".

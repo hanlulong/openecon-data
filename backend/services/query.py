@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import ValidationError
 
@@ -1461,7 +1461,7 @@ class QueryService:
         intent: ParsedIntent,
         conversation_id: str,
         tracker: Optional["ProcessingTracker"] = None,
-    ) -> Optional[QueryResponse]:
+    ) -> Union[QueryResponse, "_ic_DefinitionSentinel"]:
         """Delegates to :func:`indicator_clarification.handle_informational_intent`."""
         return _ic_handle_informational_intent(self, query, intent, conversation_id, tracker)
 
@@ -5262,8 +5262,9 @@ class QueryService:
                         conv_id, "assistant", _info_response.message or "",
                     )
                     return _info_response
-                # Defensive: the handler always answers an informational label
-                # with text; a None would fall through to the LLM parse.
+                # The handler always answers an informational label with text;
+                # make a contract break visible instead of silently fetching.
+                logger.warning("Informational handler returned no answer (follow-up); falling through to parse: %s", query[:60])
 
             # ── Dispatch: Parameter Delta ───────────────────────────────
             if _delta is not None:
@@ -5992,6 +5993,7 @@ class QueryService:
                         conv_id, "assistant", informational_response.message or "",
                     )
                     return informational_response
+                logger.warning("Informational handler returned no answer; falling through to fetch: %s", query[:60])
 
             # Snapshot the previous successful intent so we can restore it if
             # this round fails (error / no-data).  Clarification intents are

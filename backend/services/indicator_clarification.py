@@ -23,7 +23,7 @@ import json
 import logging
 import re
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 
 from ..models import (
     ClarificationOption,
@@ -1913,16 +1913,25 @@ async def _handle_definition_query(
     conversation_id: str,
     tracker: Optional[ProcessingTracker] = None,
 ) -> Optional[QueryResponse]:
-    """Use the LLM to answer definitional / explanatory questions."""
+    """Use the LLM to answer definitional / explanatory questions.
+
+    Returns None when no explanation LLM is available or it produced nothing;
+    the caller (``_DefinitionSentinel.resolve``) turns that into honest text.
+    """
     llm = getattr(qs, "openrouter", None)
     provider = getattr(llm, "llm_provider", None) if llm else None
     if provider is None:
-        return None  # No LLM available, fall through to default pipeline
+        return None  # No LLM available; resolve() answers honestly
 
+    # This answer has no fetched data behind it, so the model must not quote
+    # figures from memory (they may be stale or invented); it points the
+    # user at fetching the series instead.
     system_prompt = (
         "You are an expert economist. Answer the user's question clearly and concisely "
-        "in 2-4 sentences. Focus on the economic definition, why it matters, and how it "
-        "is commonly measured. Do not use markdown headers. Use **bold** for key terms."
+        "in 2-4 sentences, in the language of the question. Focus on the economic definition, "
+        "why it matters, and how it is commonly measured. Do not state specific current or "
+        "recent values, rates or figures for any country; if the user seems to want them, "
+        "say they can ask for the data series. Do not use markdown headers. Use **bold** for key terms."
     )
     try:
         result = await provider.generate(
@@ -2020,7 +2029,7 @@ def handle_informational_intent(
     intent: ParsedIntent,
     conversation_id: str,
     tracker: Optional[ProcessingTracker] = None,
-) -> Optional[QueryResponse]:
+) -> Union[QueryResponse, "_DefinitionSentinel"]:
     """Handle informational queries classified by the LLM (queryType=informational).
 
     Dispatches on the LLM-chosen ``intent.informationalSubtype``:
@@ -2061,8 +2070,8 @@ def handle_informational_intent(
             provider = None
 
     # Try extracting search terms from the parsed intent indicators first.
-    # If the intent has only placeholder values (e.g., from pre-LLM dispatch),
-    # fall back to extracting search terms from the raw query text.
+    # If the intent has only placeholder values (the Tier-2 follow-up
+    # dispatch), fall back to extracting search terms from the raw query text.
     # Use the shared placeholder helper (was a divergent literal set that drifted
     # from the canonical one and omitted "unspecified" etc.).
     raw_indicators = [
@@ -2076,9 +2085,14 @@ def handle_informational_intent(
     )
     search_terms = " ".join(search_terms.split()).strip()
 
-    # Fallback: extract search terms from the raw query by stripping
-    # common question/metadata words.
-    if not search_terms:
+    # Fallback ONLY for a placeholder intent (the Tier-2 follow-up dispatch
+    # builds one without a parse): extract search terms from the raw query by
+    # stripping common question/metadata words. When the parse supplied its
+    # own terms and they were all generic ("indicators"), the LLM named no
+    # topic — re-deriving terms from the raw text would search the whole
+    # sentence for non-English asks ("有哪些指标" found nothing while
+    # "what indicators do you have" got the overview).
+    if not search_terms and not raw_indicators:
         search_terms = _extract_search_terms_from_query(query)
 
     # Try to detect provider from the query text if not already set

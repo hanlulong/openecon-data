@@ -1,9 +1,11 @@
+import logging
 import math
 from datetime import datetime
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+logger = logging.getLogger(__name__)
 
 #
 # Core data structures shared across the backend
@@ -93,8 +95,24 @@ class NormalizedData(BaseModel):
 _QUERY_TYPES = frozenset({"data_fetch", "informational", "analysis", "comparison"})
 # Contract enum for ParsedIntent.informationalSubtype (which text answer an
 # informational ask gets). Chosen by the LLM; absent means the handler's
-# structural default.
+# structural default. Both enums are stated in SimplifiedPrompt and the delta
+# extractor prompt (test_informational_llm_authority checks they stay in sync).
 _INFORMATIONAL_SUBTYPES = frozenset({"indicator_search", "data_sources", "indicator_count", "definition"})
+
+
+def _normalize_contract_label(field: str, value: Any, allowed: frozenset, default: Optional[str]) -> Optional[str]:
+    """Structural enum normalization for an LLM-emitted label.
+
+    Case/whitespace are normalized; a missing value or one outside the
+    contract enum becomes ``default``. A NON-EMPTY off-contract value is
+    logged so label drift from the parse model stays measurable.
+    """
+    normalized = str(value or "").strip().lower()
+    if normalized in allowed:
+        return normalized
+    if normalized:
+        logger.info("Off-contract %s %r from the LLM coerced to %r", field, value, default)
+    return default
 
 
 class ParsedIntent(BaseModel):
@@ -153,16 +171,14 @@ class ParsedIntent(BaseModel):
         # retries or a failed parse on a DATA query. Case/whitespace are
         # normalized; anything missing or outside the contract enum takes the
         # data path. No keyword guess ever substitutes for the label.
-        normalized = str(v or "").strip().lower()
-        return normalized if normalized in _QUERY_TYPES else "data_fetch"
+        return _normalize_contract_label("queryType", v, _QUERY_TYPES, "data_fetch")
 
     @field_validator('informationalSubtype', mode='before')
     @classmethod
     def normalize_informational_subtype(cls, v):
         # Structural: tolerate case/whitespace; an off-contract value becomes
         # None (the handler's default) instead of failing the whole parse.
-        normalized = str(v or "").strip().lower()
-        return normalized if normalized in _INFORMATIONAL_SUBTYPES else None
+        return _normalize_contract_label("informationalSubtype", v, _INFORMATIONAL_SUBTYPES, None)
 
     @field_validator('recommendedChartType', mode='before')
     @classmethod
