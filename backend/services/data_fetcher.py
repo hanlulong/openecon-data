@@ -1547,25 +1547,33 @@ def _observation_period(obs_date: date, period_code: Optional[str]) -> tuple[dat
 
 
 def _window_bound(value: Any, *, is_end: bool) -> Optional[date]:
-    """Parse a window bound (ISO date, YYYY-MM, YYYY, or int year)."""
+    """Parse a window bound (ISO date, YYYY-MM, YYYY, or int year).
+
+    Never LOOSER than the previous year-level rule: a bound whose shape is
+    not ISO ("2020-Q1", "2020/01/01") or whose month is out of range still
+    yields its year's Jan-1 / Dec-31, and an out-of-range day ("2026-02-30")
+    is clamped to the month's last day — so one malformed bound can never
+    silently drop that side of the window. None only when no leading year.
+    """
     text = str(value if value is not None else "").strip()
     if not text:
         return None
+    year_bound = None
+    if len(text) >= 4 and text[:4].isdigit() and (len(text) == 4 or not text[4].isdigit()):
+        year_bound = date(int(text[:4]), 12, 31) if is_end else date(int(text[:4]), 1, 1)
     match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?(?:[Tt ].*)?", text)
     if not match:
-        return None
+        return year_bound
     year = int(match.group(1))
     month = int(match.group(2)) if match.group(2) else (12 if is_end else 1)
     if not 1 <= month <= 12:
-        return None
+        return year_bound
+    last_day = calendar.monthrange(year, month)[1]
     if match.group(3):
-        day = int(match.group(3))
+        day = min(max(int(match.group(3)), 1), last_day)
     else:
-        day = calendar.monthrange(year, month)[1] if is_end else 1
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
+        day = last_day if is_end else 1
+    return date(year, month, day)
 
 
 def _requested_window(params: dict[str, Any]) -> tuple[Optional[date], Optional[date]]:
@@ -1619,6 +1627,32 @@ def _series_period_for_points(series: Any) -> Optional[str]:
     return _series_period_code(series, dates)
 
 
+def _requested_frequency_code(params: dict[str, Any]) -> Optional[str]:
+    """Requested frequency as a period code, from structured signals only.
+
+    1. ``params['frequency']`` — the LLM-parsed / state-carried slot (delta
+       frequency changes, carried state, clarification carries).
+    2. ``params['__frequency_mismatch']['requested_frequency']`` — the
+       selector's annotation on a pick KEPT despite a frequency-only conflict
+       (the first-turn parse has no frequency slot, so without this the kept
+       daily-for-monthly pick would be served silently). Comma-joined when
+       several were requested: used only when they normalize to ONE code.
+    """
+    code = _frequency_code(params.get("frequency"))
+    if code:
+        return code
+    mismatch = params.get("__frequency_mismatch")
+    if not isinstance(mismatch, dict):
+        return None
+    codes = {
+        c for c in (
+            _frequency_code(token)
+            for token in str(mismatch.get("requested_frequency") or "").split(",")
+        ) if c
+    }
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
 def _disclose_frequency_mismatch(
     result: List[NormalizedData], params: dict[str, Any], language: Optional[str],
 ) -> List[NormalizedData]:
@@ -1626,13 +1660,14 @@ def _disclose_frequency_mismatch(
 
     One post-fetch reconciliation point (fresh fetches AND cache hits, every
     substitution path: kept frequency-conflict picks, exact-code locks,
-    provider fallbacks, annual-only mirrors). Compares the structured,
-    LLM-parsed ``params['frequency']`` with each series' Metadata.frequency
-    via the closed code table; unknown on either side -> no note. Returns a
+    provider fallbacks, annual-only mirrors). Compares the structured
+    requested frequency (``_requested_frequency_code``) with each series'
+    SERVED Metadata.frequency via the closed code table; unknown on either
+    side -> no note. Returns a
     list where annotated series are COPIES, so cached provider objects never
     accumulate per-request (per-language) notes. Idempotent.
     """
-    requested = _frequency_code(params.get("frequency"))
+    requested = _requested_frequency_code(params)
     if not requested or not result:
         return result
     disclosed: List[NormalizedData] = []
@@ -1670,10 +1705,14 @@ def _enforce_user_time_window(
     defaulted endDate in the past (inverted range), the provider's date param
     fell through, and the FULL 56-point history was served as a silent
     success. Same class: a frozen series (data ends 2019) served for
-    "last 3 months". Filtering is YEAR-granularity on purpose — annual and
-    quarterly observations are dated Jan-1/quarter-start, so a point-level
-    comparison against a mid-year bound would wrongly drop boundary-year
-    observations. Applies ONLY when the user explicitly set the scope
+    "last 3 months". Membership is CALENDAR-PERIOD OVERLAP (shared with
+    _classify_time_window_probe via _observation_overlaps_window): a point is
+    kept iff the calendar bucket containing its date at the series frequency
+    (the coarser of the labeled frequency and the observed date spacing)
+    overlaps the window — so an annual 2021 point stays for a window starting
+    2021-07-18, while other quarters/months of the same year no longer count
+    for "Q4 2026" / "2026-11". Unknown frequency falls back to the previous
+    YEAR-level rule. Applies ONLY when the user explicitly set the scope
     (_user_set_time_scope); provider-default windows keep their existing
     edge behavior. An all-dropped result flows into the standard
     no-data-for-period path, which the response finalizer explains in the

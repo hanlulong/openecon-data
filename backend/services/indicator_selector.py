@@ -436,6 +436,28 @@ def build_continuity_kwargs(params: Any) -> Dict[str, Any]:
     return {"continuity_series": value} if value else {}
 
 
+# Provenance param carrying a KEPT frequency-only-conflict pick's annotation
+# from the selection seam to the post-fetch frequency reconciliation
+# (data_fetcher._disclose_frequency_mismatch). Provenance only: excluded from
+# data-cache identity (query._build_cache_params) and dropped whenever the
+# code it describes is discarded or re-resolved.
+FREQUENCY_MISMATCH_PARAM = "__frequency_mismatch"
+
+
+def selection_provenance_params(selection: Any) -> Dict[str, Any]:
+    """Params a consumption seam installs alongside a selector PICK.
+
+    Single construction point shared by the main resolution seam and the
+    prefetch-clarification install so both carry the same provenance. {}
+    when the pick carries no annotation (callers must then DROP any stale
+    value: see ``FREQUENCY_MISMATCH_PARAM``).
+    """
+    mismatch = getattr(selection, "metadata_mismatch", None)
+    if isinstance(mismatch, dict) and mismatch:
+        return {FREQUENCY_MISMATCH_PARAM: dict(mismatch)}
+    return {}
+
+
 def build_region_selection_kwargs(
     region: Optional[str],
     provider: Optional[str],
@@ -533,6 +555,10 @@ class IndicatorSelector:
                     # as its first, freshly-adjudicated resolution did — repeats
                     # are precisely where the flip-flop shows up.
                     made_under_prefer_ask=bool(cached.get("made_under_prefer_ask", False)),
+                    # A kept frequency-only-conflict pick must stay
+                    # non-authoritative (and keep its disclosure input) on
+                    # repeats too, not only on its first adjudication.
+                    metadata_mismatch=cached.get("metadata_mismatch"),
                 )
 
         result = await self._select_uncached(
@@ -562,6 +588,11 @@ class IndicatorSelector:
                     "source": result.source,
                     "made_under_prefer_ask": bool(
                         getattr(result, "made_under_prefer_ask", False)
+                    ),
+                    "metadata_mismatch": (
+                        dict(result.metadata_mismatch)
+                        if getattr(result, "metadata_mismatch", None)
+                        else None
                     ),
                 },
             )

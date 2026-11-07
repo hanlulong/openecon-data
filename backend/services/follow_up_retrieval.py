@@ -48,35 +48,56 @@ def _catalog_name_for_code(provider: str, code: str) -> str:
     return str(metadata.get("name") or metadata.get("title") or "").strip()
 
 
+def _clean(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
 def structured_indicator_label(
     intent: Any, params: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Best semantic indicator label available on the intent/params.
 
-    Prefers the conversation-state semantic label, then the display label,
-    then the indicator token; a code-shaped token is replaced by its catalog
-    name when the indicator DB knows it.
+    1. ``__semantic_indicator_label`` is semantic BY CONSTRUCTION (merged
+       conversation state / LLM indicator text): an acronym concept such as
+       "GDP"/"CPI"/"PMI" is kept as-is. Only when the indicator DB actually
+       knows that exact token as a code for this provider is it replaced by
+       the catalog NAME (a carried "UNRATE"/"BAMLH0A0HYM2" becomes its title).
+    2. Otherwise the indicator token, whose code shape is checked: a bare
+       provider code becomes its catalog name. On a follow-up an unknown bare
+       code yields "" (never "Japan UNRATE"), and the display label — which
+       is the raw query text by construction — is skipped, as is any
+       candidate equal to the raw delta utterance.
     """
     params = params or (getattr(intent, "parameters", None) or {})
     indicators = list(getattr(intent, "indicators", None) or []) if intent is not None else []
-    candidates = [
-        params.get("__semantic_indicator_label"),
-        params.get("__display_indicator_label"),
-        indicators[0] if indicators else "",
-        params.get("indicator"),
-    ]
     provider = str(getattr(intent, "apiProvider", "") or "") if intent is not None else ""
+    follow_up = is_follow_up_intent(intent, params)
+    raw_texts = set()
+    if follow_up:
+        for raw in (getattr(intent, "originalQuery", "") if intent is not None else "", params.get("__original_query")):
+            cleaned = _clean(raw).lower()
+            if cleaned:
+                raw_texts.add(cleaned)
+
+    semantic = _clean(params.get("__semantic_indicator_label"))
+    if semantic and semantic.lower() not in raw_texts:
+        if _looks_like_provider_code(semantic):
+            return _catalog_name_for_code(provider, semantic) or semantic
+        return semantic
+
+    candidates = [] if follow_up else [params.get("__display_indicator_label")]
+    candidates += [indicators[0] if indicators else "", params.get("indicator")]
     code_fallback = ""
     for candidate in candidates:
-        text = re.sub(r"\s+", " ", str(candidate or "")).strip()
-        if not text:
+        text = _clean(candidate)
+        if not text or text.lower() in raw_texts:
             continue
         if not _looks_like_provider_code(text):
             return text
         if not code_fallback:
             code_fallback = text
     if code_fallback:
-        return _catalog_name_for_code(provider, code_fallback) or code_fallback
+        return _catalog_name_for_code(provider, code_fallback) or ("" if follow_up else code_fallback)
     return ""
 
 

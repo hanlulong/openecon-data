@@ -486,3 +486,272 @@ def test_no_data_clarification_retrieves_with_concept_on_follow_up():
     indicator_clarification.build_no_data_indicator_clarification(qs, "c1", "add Germany", intent)
     assert seen and all("add Germany" not in q for q in seen)
     assert "consumer price index" in seen[0] and "Germany" in seen[0]
+
+
+# --------------------------------------------------------------------------
+# Review fix-ups: kept-pick provenance survives the selection cache and
+# reaches the first-turn disclosure; follow-up labels never leak raw text;
+# a malformed window bound never drops its side of the window; the collective
+# delta path persists provenance end to end.
+# --------------------------------------------------------------------------
+
+def _treasury_selector(monkeypatch, seen):
+    selector = IndicatorSelector(settings=SimpleNamespace())
+    candidates = [
+        ("DGS10", "Market Yield on U.S. Treasury Securities at 10-Year Constant Maturity"),
+        ("TB3MS", "3-Month Treasury Bill Secondary Market Rate"),
+    ]
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", lambda q, p, constraint_query=None: (candidates, [0.9, 0.5]))
+    monkeypatch.setattr(selector, "_enrich_candidates", _fake_enrich({
+        "DGS10": {"frequency": "Daily", "unit": "Percent"},
+        "TB3MS": {"frequency": "Monthly", "unit": "Percent"},
+    }))
+
+    async def fake_llm_pick(query, cands, provider, prefer_ask=False, country=None, **_kw):  # noqa: ARG001
+        seen.append([code for code, _ in cands])
+        if len(cands) > 1:
+            return SelectionResult(code="DGS10", name=cands[0][1], source="llm_pick")
+        return SelectionResult(code=None, source="llm_reject", retry_query="")
+
+    monkeypatch.setattr(selector, "_llm_pick", fake_llm_pick)
+    return selector
+
+
+@pytest.mark.asyncio
+async def test_kept_pick_stays_non_authoritative_across_selection_cache(monkeypatch):
+    from backend.services import indicator_selector as selector_module
+
+    selector_module._SELECTION_CACHE.clear()
+    seen: list = []
+    selector = _treasury_selector(monkeypatch, seen)
+    first = await selector.select("monthly 10-year treasury yield", "FRED")
+    llm_calls = len(seen)
+    repeat = await selector.select("monthly 10-year treasury yield", "FRED")
+
+    assert len(seen) == llm_calls, "the repeat must be served by the selection cache"
+    assert first.code == repeat.code == "DGS10"
+    assert first.authoritative is False
+    assert repeat.authoritative is False
+    assert repeat.metadata_mismatch == first.metadata_mismatch == {
+        "requested_frequency": "monthly", "native_frequency": "Daily",
+    }
+
+
+def _fred_resolution_svc():
+    return SimpleNamespace(
+        fred_provider=SimpleNamespace(),
+        statscan_provider=SimpleNamespace(),
+        _looks_like_provider_indicator_code=lambda _p, _i: False,
+        _verify_semantic_discriminators=lambda *_a, **_k: True,
+    )
+
+
+def _resolve_with_selection(selection, params, query="monthly 10-year treasury yield", indicator="10-year treasury yield"):
+    from unittest.mock import patch
+
+    from backend.services.indicator_resolution import resolve_indicator_for_fetch
+
+    intent = ParsedIntent(
+        apiProvider="FRED", indicators=[indicator], parameters=dict(params),
+        clarificationNeeded=False, originalQuery=query, language="en",
+    )
+    with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)):
+        resolved = asyncio.run(resolve_indicator_for_fetch(_fred_resolution_svc(), "FRED", intent, dict(params)))
+    return intent, resolved
+
+
+def test_kept_pick_annotation_reaches_first_turn_disclosure_without_frequency_slot(monkeypatch):
+    """First-turn parses carry no 'frequency' slot: the selector annotation is
+    the requested-frequency signal, threaded selector -> resolution -> fetch."""
+    mismatch = {"requested_frequency": "monthly", "native_frequency": "Daily"}
+    selection = SelectionResult(code="DGS10", name="10-Year Treasury", source="llm_pick", metadata_mismatch=mismatch)
+    intent, params = _resolve_with_selection(selection, {"country": "US"})
+
+    assert params["indicator"] == "DGS10"
+    assert params["__frequency_mismatch"] == mismatch
+    assert "__authoritative_pick_code" not in params
+    assert "frequency" not in params
+
+    _capture_dispatch(monkeypatch, [_series([("2024-01-02", 4.1), ("2024-01-03", 4.2)], frequency="Daily")])
+    svc = _svc()
+    intent.parameters = params
+    served = asyncio.run(data_fetcher.fetch_data(svc, intent))
+    assert any("daily" in note and "monthly" in note for note in served[0].metadata.notes or [])
+    assert not (svc._save_to_cache.await_args.args[2].metadata.notes or []), "disclosure must not be cached"
+
+
+def test_stale_frequency_annotation_is_dropped_when_a_new_pick_carries_none():
+    selection = SelectionResult(code="GS10", name="10-Year Treasury, monthly", source="llm_pick")
+    _intent, params = _resolve_with_selection(
+        selection,
+        {"country": "US", "__frequency_mismatch": {"requested_frequency": "monthly", "native_frequency": "Daily"}},
+    )
+    assert params["indicator"] == "GS10"
+    assert "__frequency_mismatch" not in params
+
+
+def test_frequency_annotation_is_provenance_not_cache_identity():
+    svc = QueryService.__new__(QueryService)
+    base = {"indicator": "DGS10", "country": "US", "startDate": "2024-01-01"}
+    annotated = {**base, "__frequency_mismatch": {"requested_frequency": "monthly", "native_frequency": "Daily"}}
+    assert svc._build_cache_params("FRED", dict(base)) == svc._build_cache_params("FRED", annotated)
+
+
+def test_multiple_requested_frequencies_in_annotation_do_not_disclose():
+    params = {"__frequency_mismatch": {"requested_frequency": "annual,monthly", "native_frequency": "Daily"}}
+    out = data_fetcher._disclose_frequency_mismatch([_series([("2024-01-01", 1.0)], frequency="Daily")], params, "en")
+    assert not (out[0].metadata.notes or [])
+
+
+@pytest.mark.parametrize("utterance", ["和日本比较", "compare with Japan"])
+def test_follow_up_label_never_uses_display_label_or_raw_utterance(monkeypatch, utterance):
+    from backend.services import follow_up_retrieval
+
+    monkeypatch.setattr(follow_up_retrieval, "_catalog_name_for_code", lambda provider, code: "")
+    params = {
+        "indicator": "GDPC1", "country": "JP",
+        "__semantic_indicator_label": "GDP",          # acronym concept, not a catalog id
+        "__display_indicator_label": utterance,       # raw text by construction
+        "__original_query": utterance,
+    }
+    intent = ParsedIntent(apiProvider="FRED", indicators=["GDPC1"], parameters=params,
+                          originalQuery=utterance, clarificationNeeded=False, isFollowUp=True)
+    text = data_fetcher._fred_country_context_query(params, intent, "JP", "JP")
+    assert text == "Japan GDP"
+
+    # Semantic label equal to the utterance (a bad upstream label) is skipped too.
+    params2 = {**params, "__semantic_indicator_label": utterance}
+    intent2 = intent.model_copy(update={"parameters": params2})
+    assert utterance not in data_fetcher._fred_country_context_query(params2, intent2, "JP", "JP")
+
+
+def test_follow_up_code_label_known_to_catalog_becomes_its_title(monkeypatch):
+    from backend.services import follow_up_retrieval
+
+    names = {"BAMLH0A0HYM2": "ICE BofA US High Yield Index Option-Adjusted Spread"}
+    monkeypatch.setattr(follow_up_retrieval, "_catalog_name_for_code", lambda provider, code: names.get(code, ""))
+    params = {"indicator": "BAMLH0A0HYM2", "country": "GB", "__semantic_indicator_label": "BAMLH0A0HYM2"}
+    intent = ParsedIntent(apiProvider="FRED", indicators=["BAMLH0A0HYM2"], parameters=params,
+                          originalQuery="再加上英国", clarificationNeeded=False, isFollowUp=True)
+    text = data_fetcher._fred_country_context_query(params, intent, "GB", "GB")
+    assert "High Yield" in text and "BAMLH0A0HYM2" not in text and "再加上英国" not in text
+
+
+def test_follow_up_unknown_bare_code_yields_no_search_text(monkeypatch):
+    from backend.services import follow_up_retrieval
+
+    monkeypatch.setattr(follow_up_retrieval, "_catalog_name_for_code", lambda provider, code: "")
+    params = {"indicator": "UNRATE", "country": "JP", "__display_indicator_label": "compare with Japan"}
+    intent = ParsedIntent(apiProvider="FRED", indicators=["UNRATE"], parameters=params,
+                          originalQuery="compare with Japan", clarificationNeeded=False, isFollowUp=True)
+    assert data_fetcher._fred_country_context_query(params, intent, "JP", "JP") == ""
+
+
+@pytest.mark.parametrize(
+    "start, end, points, expected",
+    [
+        # Out-of-range day: clamped, the start side is still enforced.
+        ("2026-02-30", "2026-12-31", [("2024-05-01", 1.0), ("2026-03-01", 2.0)], ["2026-03-01"]),
+        # Non-ISO start: year-level bound, never dropped.
+        ("2020-Q1", "2021-12-31", [("2018-06-01", 1.0), ("2020-02-01", 2.0)], ["2020-02-01"]),
+        # Out-of-range day on the END bound.
+        ("2026-01-01", "2026-02-29", [("2026-02-01", 1.0), ("2026-03-01", 2.0)], ["2026-02-01"]),
+    ],
+)
+def test_malformed_window_bound_never_drops_its_side(start, end, points, expected):
+    series = _series(points, frequency="Monthly")
+    out = data_fetcher._enforce_user_time_window(_user_window(start, end), "", [series])
+    assert [p.date for p in out[0].data] == expected
+
+
+def _collective_service(monkeypatch, fetch_reply):
+    from backend.services import query as query_module
+
+    svc = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+    captured_intents: list = []
+    saved_states: list = []
+
+    async def fake_fetch(intent):
+        captured_intents.append(copy.deepcopy(intent))
+        return fetch_reply(intent)
+
+    monkeypatch.setattr(svc, "_fetch_data", fake_fetch)
+    monkeypatch.setattr(svc, "_verify_execution_result", AsyncMock(return_value=None))
+    monkeypatch.setattr(query_module.conversation_manager, "add_message_safe", lambda conv_id, *_a, **_k: conv_id or "conv-mrtf")
+    monkeypatch.setattr(
+        query_module.conversation_manager, "set_conversation_state",
+        lambda _conv_id, state: saved_states.append(state.model_copy(deep=True)),
+    )
+    return svc, captured_intents, saved_states
+
+
+def test_collective_delta_end_to_end_persists_window_provenance_for_turn_three(monkeypatch):
+    def reply(intent):
+        country = (intent.parameters or {}).get("country") or "US"
+        return [_series([("2024-01-01", 1.0), ("2024-04-01", 2.0)], frequency="Quarterly", country=country)]
+
+    svc, captured, saved = _collective_service(monkeypatch, reply)
+    state = _state(provider="FRED", code="GDPC1", source="default", language="zh")
+
+    # Turn 2: zh time change on an exact-locked collective member.
+    turn2 = FollowUpDelta(changed_start_date="2024-01-01", delta_type="time_change", raw_query="只看最近两年")
+    response = asyncio.run(svc._execute_collective_answer_member_delta(
+        query="只看最近两年", conversation_id="conv-mrtf", tracker=None, state=state, delta=turn2,
+    ))
+    assert response is not None and not response.error
+    member_params = captured[-1].parameters
+    assert member_params["startDate"] == "2024-01-01"
+    assert member_params["__time_scope_authority"] == "user"
+    assert captured[-1].language == "zh"
+    response_params = response.intent.parameters
+    assert response_params["startDate"] == "2024-01-01"
+    assert response_params["__time_scope_authority"] == "user"
+    assert response.intent.language == "zh"
+    persisted = saved[-1]
+    assert (persisted.start_date, persisted.time_scope_source, persisted.language) == ("2024-01-01", "user", "zh")
+
+    # Turn 3 from the PERSISTED state: add a country; the user window holds.
+    turn3 = FollowUpDelta(added_countries=["JP"], delta_type="add_country", raw_query="再加上日本")
+    response3 = asyncio.run(svc._execute_collective_answer_member_delta(
+        query="再加上日本", conversation_id="conv-mrtf", tracker=None, state=persisted, delta=turn3,
+    ))
+    assert response3 is not None and not response3.error
+    turn3_members = captured[-2:]
+    for intent in turn3_members:
+        params = intent.parameters or {}
+        assert params.get("startDate") == "2024-01-01"
+        assert params.get("__time_scope_authority") == "user"
+        assert intent.language == "zh"
+    assert saved[-1].time_scope_source == "user"
+
+
+def test_collective_shared_resolution_rewrite_keeps_provenance(monkeypatch):
+    def reply(intent):
+        country = (intent.parameters or {}).get("country") or "US"
+        series = _series([("2023-01-01", 1.0)], frequency="annual", source="World Bank", country=country)
+        series.metadata.seriesId = "NY.GDP.PCAP.CD"
+        return [series]
+
+    svc, captured, _saved = _collective_service(monkeypatch, reply)
+    state = ConversationState(
+        indicator="GDP", provider="WORLDBANK", countries=["US", "JP"],
+        start_date="2019-01-01", end_date="2024-12-31", time_scope_source="user",
+        language="zh", turn_number=2, original_query="美国和日本GDP",
+        active_answer_members=[
+            AnswerSetMember(provider="WORLDBANK", indicator_label="GDP", provider_code="NY.GDP.MKTP.CD", country="US"),
+            AnswerSetMember(provider="WORLDBANK", indicator_label="GDP", provider_code="NY.GDP.MKTP.CD", country="JP"),
+        ],
+    )
+    delta = FollowUpDelta(changed_indicator="GDP per capita", delta_type="indicator_change", raw_query="改成人均GDP")
+    response = asyncio.run(svc._execute_collective_answer_member_delta(
+        query="改成人均GDP", conversation_id="conv-mrtf", tracker=None, state=state, delta=delta,
+    ))
+    assert response is not None and not response.error
+    assert len(captured) == 2
+    rewritten = captured[1].parameters
+    assert rewritten.get("__decision_source") == "collective_shared_resolution"
+    for intent in captured:
+        params = intent.parameters or {}
+        assert params.get("startDate") == "2019-01-01"
+        assert params.get("__time_scope_authority") == "user"
+        assert intent.language == "zh"

@@ -3310,6 +3310,9 @@ class QueryService:
             # queries, one authoritative and one not, must hit the same entry).
             "__authoritative_pick_code",
             "__authoritative_pick_provider",
+            # Kept-pick frequency annotation (selector -> post-fetch
+            # disclosure): provenance, never data identity.
+            "__frequency_mismatch",
             # Provenance only — the DATES are identity-bearing, their source
             # is not (same window must hit the same cache entry).
             "__time_scope_authority",
@@ -6514,6 +6517,7 @@ class QueryService:
                     # The discarded code loses its selection authority; the
                     # re-adjudication re-mints it only if the new pick earns it.
                     "__authoritative_pick_code", "__authoritative_pick_provider",
+                    "__frequency_mismatch",
                 ):
                     params0.pop(key, None)
             intent.parameters = params0
@@ -6557,6 +6561,7 @@ class QueryService:
                     # The dead code loses its selection authority; the re-adjudication
                     # re-mints it only if the next-best pick earns it.
                     "__authoritative_pick_code", "__authoritative_pick_provider",
+                    "__frequency_mismatch",
                 ):
                     params.pop(key, None)
                 intent.parameters = params

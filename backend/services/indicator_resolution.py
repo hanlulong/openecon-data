@@ -2912,6 +2912,10 @@ async def resolve_indicator_for_fetch(
         if "__authoritative_pick_code" not in extra:
             merged.pop("__authoritative_pick_code", None)
             merged.pop("__authoritative_pick_provider", None)
+        # Same for the kept-pick frequency annotation: it describes ONE
+        # freshly adjudicated pick and must never survive onto another code.
+        if "__frequency_mismatch" not in extra:
+            merged.pop("__frequency_mismatch", None)
         if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
         # A.3 display carry: preserve the user's ORIGINAL phrasing so display
@@ -3360,6 +3364,12 @@ async def resolve_indicator_for_fetch(
                     if getattr(selection, "authoritative", False)
                     else {}
                 )
+                # A pick KEPT despite a frequency-only metadata conflict carries
+                # its {requested, native} annotation to the post-fetch
+                # disclosure (the first-turn parse has no frequency slot, so
+                # this is the only requested-frequency signal on that path).
+                from .indicator_selector import selection_provenance_params
+
                 params = _apply_indicator_with_semantic_label(
                     selection.code,
                     __semantic_authority="llm_adjudication",
@@ -3367,6 +3377,7 @@ async def resolve_indicator_for_fetch(
                     __indicator_selection_source=selection.source,
                     **_statscan_selected_product_extra(selection.code, "llm_adjudication"),
                     **_authority_extra,
+                    **selection_provenance_params(selection),
                 )
                 if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
                     logger.info(

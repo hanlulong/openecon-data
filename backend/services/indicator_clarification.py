@@ -3059,6 +3059,16 @@ async def build_prefetch_indicator_choice_clarification(
                 params["__semantic_indicator_label"] = indicator_query
                 params["__semantic_authority"] = "llm_adjudication"
                 params["__decision_source"] = str(getattr(selection, "source", "") or "llm_pick")
+                # Same pick provenance as the main resolution seam (kept
+                # frequency-only-conflict annotation -> post-fetch disclosure);
+                # a stale annotation from an earlier code never survives.
+                from .indicator_selector import (
+                    FREQUENCY_MISMATCH_PARAM,
+                    selection_provenance_params,
+                )
+
+                params.pop(FREQUENCY_MISMATCH_PARAM, None)
+                params.update(selection_provenance_params(selection))
                 intent.parameters = params
                 resolved = SimpleNamespace(
                     code=selection_code,
