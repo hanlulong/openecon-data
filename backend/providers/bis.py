@@ -6,10 +6,12 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
+import httpx
+
 from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
-from ..utils.retry import DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, ProviderCoolingDown
 from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 
@@ -18,6 +20,20 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+class _BISCandidatesUnreachable(Exception):
+    """Every REF_AREA candidate for one country failed in transport.
+
+    Internal marker between the per-country fetch and the aggregate verdict:
+    the country has NO data verdict (as opposed to a definitive empty/4xx
+    answer), so the aggregate must not report "BIS has no data".
+    """
+
+    def __init__(self, country: str, transport_error: BaseException) -> None:
+        super().__init__(f"{country}: {transport_error}")
+        self.country = country
+        self.transport_error = transport_error
 
 
 def _bis_year_from_iso(date_str: Optional[str]) -> Optional[int]:
@@ -955,6 +971,9 @@ class BISProvider(BaseProvider):
                 # Euro-area aggregate. This selection is provider/indicator
                 # agnostic — no code is special-cased.
                 candidate_results: list = []
+                # (REF_AREA, error) per candidate whose HTTP exchange failed
+                # in transport.
+                transport_errors: list = []
 
                 for current_country_code in country_codes_to_try:
                     # WS_EER (Effective Exchange Rates) uses a different key structure:
@@ -988,12 +1007,15 @@ class BISProvider(BaseProvider):
                                 "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
                             }, timeout=20.0, raise_on_status=False)
                             if response.status_code != 200 or not response.content:
-                                logger.debug(f"BIS: No data for {current_country_code} (status: {response.status_code})")
+                                logger.warning(
+                                    "BIS: no data for %s %s (status: %s)",
+                                    indicator_code, current_country_code, response.status_code,
+                                )
                                 continue
                             try:
                                 payload = response.json()
                             except Exception as json_err:
-                                logger.debug(f"BIS: JSON parse error for {current_country_code}: {json_err}")
+                                logger.warning(f"BIS: JSON parse error for {current_country_code}: {json_err}")
                                 continue
 
                         if "data" not in payload or "dataSets" not in payload["data"]:
@@ -1148,8 +1170,31 @@ class BISProvider(BaseProvider):
                         candidate_results.append(NormalizedData(metadata=metadata, data=data_points))
                         continue
 
-                    except Exception:
+                    except (DataNotAvailableError, httpx.HTTPError, asyncio.TimeoutError) as transport_exc:
+                        # Only the HTTP calls raise these: _get_with_retry has
+                        # already spent its 429/5xx/timeout retries (or the
+                        # breaker is open). That is an AVAILABILITY failure, not
+                        # evidence that BIS lacks this series.
+                        transport_errors.append((current_country_code, transport_exc))
+                        logger.warning(
+                            "BIS: transport failure for %s %s: %s",
+                            indicator_code, current_country_code, transport_exc,
+                        )
                         continue
+                    except (KeyError, IndexError, TypeError, ValueError, AttributeError) as parse_exc:
+                        logger.warning(
+                            "BIS: unparseable payload for %s %s: %r",
+                            indicator_code, current_country_code, parse_exc,
+                        )
+                        continue
+
+                if not candidate_results and transport_errors:
+                    # No candidate served data and at least one never answered
+                    # (e.g. the national key 404s but the XM aggregate that
+                    # would serve it timed out): the country has no verdict.
+                    # Surface the transport failure instead of letting the
+                    # caller read None as "no data".
+                    raise _BISCandidatesUnreachable(country_code_raw, transport_errors[-1][1])
 
                 if candidate_results:
                     # Freshness wins: return the candidate whose last observation
@@ -1163,6 +1208,17 @@ class BISProvider(BaseProvider):
                             (best.metadata.endDate if best.metadata else None),
                             len(candidate_results) - 1,
                         )
+                    if transport_errors and best.metadata is not None:
+                        # Freshness-wins could not compare against a candidate
+                        # that never answered (e.g. the XM aggregate timed out
+                        # while a discontinued national key served), so the
+                        # pick may not be the freshest BIS series: say so.
+                        unreached = ", ".join(dict.fromkeys(code for code, _ in transport_errors))
+                        best.metadata.notes = (best.metadata.notes or []) + [
+                            f"BIS could not be reached for candidate series {unreached} "
+                            f"(transport failure); a more recent BIS series may exist, "
+                            f"so this answer may not show the latest available data."
+                        ]
                     return best
 
                 return None  # No data found for this country
@@ -1174,11 +1230,14 @@ class BISProvider(BaseProvider):
             return_exceptions=True,
         )
 
+        unreachable: List[_BISCandidatesUnreachable] = []
         for cr in country_results:
             if isinstance(cr, NormalizedData):
                 results.append(cr)
+            elif isinstance(cr, _BISCandidatesUnreachable):
+                unreachable.append(cr)
             elif isinstance(cr, Exception):
-                logger.debug(f"BIS: Country fetch failed: {cr}")
+                logger.warning(f"BIS: Country fetch failed: {cr!r}")
 
         if not results and exact_provider_dataflow_request and indicator_code.startswith("WS_"):
             fallback_results = await asyncio.gather(
@@ -1204,6 +1263,23 @@ class BISProvider(BaseProvider):
         # INFRASTRUCTURE FIX: Raise error for empty results to trigger fallback
         # This enables the query orchestrator to try alternative providers
         if not results and country_list:
+            if unreachable:
+                # At least one requested country has no verdict because BIS
+                # could not be reached: claiming "BIS has no data" would be
+                # false. Re-raise the provider helper's own transport error
+                # text (timeout / 429 / 5xx / breaker) in the DataNotAvailable
+                # class the fetch chokepoint, cross-provider fallback and
+                # stale-cache resort already handle.
+                last = unreachable[-1].transport_error
+                context = (
+                    f"BIS unavailable (transport failure, not a no-data verdict) for "
+                    f"{indicator_code} in {', '.join(u.country for u in unreachable[:5])}"
+                )
+                if isinstance(last, ProviderCoolingDown):
+                    # Keep the cooldown class and its retry_after_seconds for
+                    # cooldown-aware callers.
+                    raise last.with_context(context) from last
+                raise DataNotAvailableError(f"{context}: {last}") from last
             country_names = ", ".join(country_list[:3])
             if len(country_list) > 3:
                 country_names += f", ... ({len(country_list)} total)"
