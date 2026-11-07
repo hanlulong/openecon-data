@@ -685,11 +685,44 @@ async def maybe_recover_from_uncertain_match(
     top_series = data[0]
     current_score = _score_series_relevance(query, top_series)
     top_provider, top_code = qs._extract_series_provider_and_code(top_series)
+    decisions: List[Dict[str, Any]] = []
 
-    target_countries = qs._collect_target_countries(params)
-    target_country = target_countries[0] if target_countries else None
-    indicator_query = await asyncio.to_thread(qs._select_indicator_query_for_resolution, intent) or query
-    primary_provider = normalize_provider_name(intent.apiProvider or "")
+    def _verdict(candidate: str, verdict: str, score: Optional[float] = None) -> None:
+        entry: Dict[str, Any] = {"candidate": candidate, "verdict": verdict}
+        if score is not None:
+            entry["score"] = round(float(score), 3)
+        decisions.append(entry)
+
+    def _log_decision(winner: Optional[str] = None, blocked: Optional[str] = None) -> None:
+        # ONE structured line per recovery run: which series was questioned,
+        # every candidate's verdict, and the winner. The verdicts name the
+        # rejecting predicate (gate_uncertain / region / implausible /
+        # insufficient_margin ...) so a wrong-data swap is diagnosable.
+        try:
+            payload = {
+                "query": str(query or "")[:60],
+                "current": f"{top_provider}:{top_code}",
+                "current_score": round(float(current_score), 3),
+                "candidates": decisions,
+                "winner": winner,
+            }
+            if blocked:
+                payload["blocked"] = blocked
+            logger.info("recovery_decision %s", json.dumps(payload))
+        except Exception:
+            pass
+
+    # Selection-authority guard: the served top series IS this request's
+    # confident, predicate-validated LLM pick. The comparator below is LEXICAL;
+    # it may never silently REPLACE an authoritative pick (observed live: the
+    # LLM's IMF general-government debt pick was swapped for FRED HOUSEHOLD
+    # debt because its title shared more words with the query). Recovery
+    # declines; the uncertain-result builder then decides ask-or-serve with
+    # the pick still selectable. The gate verdict itself is untouched.
+    if _selection_authority_holds(qs, intent, top_series):
+        _log_decision(blocked="authoritative_pick")
+        return None
+
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(intent.originalQuery or "") or "")
 
     candidate_keys: set[tuple[str, str]] = set()
@@ -713,12 +746,14 @@ async def maybe_recover_from_uncertain_match(
 
     best_data: Optional[List[NormalizedData]] = None
     best_score = current_score
+    winner_key: Optional[str] = None
 
     for provider_name, code in candidate_ordered:
         if top_provider and top_code and provider_name == top_provider and code.upper() == top_code.upper():
             continue
         if explicit_provider and provider_name != explicit_provider:
             continue
+        candidate_key = f"{provider_name}:{code}"
 
         attempt_intent = intent.model_copy(deep=True)
         attempt_intent.apiProvider = provider_name
@@ -738,16 +773,20 @@ async def maybe_recover_from_uncertain_match(
                 initial_delay=0.4,
             )
         except Exception:
+            _verdict(candidate_key, "fetch_error")
             continue
         if not candidate_data:
+            _verdict(candidate_key, "empty")
             continue
 
         candidate_data = qs._rerank_data_by_query_relevance(query, candidate_data)
         if qs._is_ranking_query(query):
             candidate_data = qs._apply_ranking_projection(query, candidate_data)
         if not candidate_data:
+            _verdict(candidate_key, "empty")
             continue
         if qs._has_implausible_top_series(query, candidate_data):
+            _verdict(candidate_key, "implausible")
             continue
 
         _recovery_region = str(getattr(intent, "subnationalRegion", "") or "").strip()
@@ -760,17 +799,27 @@ async def maybe_recover_from_uncertain_match(
             # must never WIN recovery and replace a region-satisfying result
             # (observed live: OECD national unemployment overrode fetched
             # StatsCan Ontario data, and the user got an empty fail-closed).
+            _verdict(candidate_key, "region")
             continue
 
         candidate_score = _score_series_relevance(query, candidate_data[0])
         candidate_uncertain = qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="recovery_candidate")
-        if (
-            (not candidate_uncertain and candidate_score >= (best_score + 0.10))
-            or candidate_score >= (best_score + 0.35)
-        ):
-            best_data = candidate_data
-            best_score = candidate_score
+        # Only a candidate the gate JUDGED confident may win, and only by a
+        # margin. There is deliberately no lexical-margin path for a
+        # gate-UNCERTAIN candidate: a bigger word-overlap score is not evidence
+        # that the data answers the question (household debt "won" that way).
+        if candidate_uncertain:
+            _verdict(candidate_key, "gate_uncertain", candidate_score)
+            continue
+        if candidate_score < (best_score + 0.10):
+            _verdict(candidate_key, "insufficient_margin", candidate_score)
+            continue
+        _verdict(candidate_key, "accepted", candidate_score)
+        best_data = candidate_data
+        best_score = candidate_score
+        winner_key = candidate_key
 
+    _log_decision(winner=winner_key)
     return best_data
 
 
@@ -3158,6 +3207,73 @@ def _selection_authority_holds(
     return picked_code
 
 
+def _is_judged_candidate_fetch(params: Optional[Dict[str, Any]]) -> bool:
+    """True for a fetch whose PURPOSE is to judge a candidate series.
+
+    Option validation (``_prefetch_option_validation``) and uncertain-match
+    recovery (``_uncertain_recovery_attempted``) both fetch a candidate in
+    order to decide whether it answers the query. No prior-resolution
+    confidence may exempt such a fetch from that judgment: the parse
+    confidence belongs to the ORIGINAL intent, not to the pinned candidate.
+    """
+    params = params or {}
+    return bool(
+        params.get("_prefetch_option_validation")
+        or params.get("_uncertain_recovery_attempted")
+    )
+
+
+def _catalog_concept_conflict(
+    qs: Any,
+    query: str,
+    intent: Optional[ParsedIntent],
+    top_series: Any,
+    *,
+    high_signal_query_cues: set,
+    top_score: float,
+) -> Optional[tuple[str, Dict[str, Any]]]:
+    """The gate's catalog concept-mismatch check, shared by every call site.
+
+    Returns ``("mapped", evidence)`` when the query's catalog concept is not
+    among the concepts the catalog MAPS to the series' provider+code;
+    ``("inferred", evidence)`` when the series is catalog-unmapped and the
+    catalog's term lookup on its title names a different concept; else None.
+    Both sides are catalog lookups (no new term lists), so a conflict means
+    the concept catalog itself disagrees with the series.
+    """
+    from .catalog_service import find_concept_by_term, find_concepts_by_code
+
+    query_concept = find_concept_by_term(query)
+    if not query_concept and intent and intent.originalQuery:
+        query_concept = find_concept_by_term(str(intent.originalQuery))
+    if not query_concept:
+        return None
+    top_provider_name, top_code = qs._extract_series_provider_and_code(top_series)
+    top_series_concepts = list(
+        (
+            find_concepts_by_code(top_provider_name, top_code)
+            if top_provider_name and top_code
+            else []
+        )
+        or []
+    )
+    if top_series_concepts:
+        if query_concept not in top_series_concepts:
+            return "mapped", {"query_concept": query_concept, "series_concepts": top_series_concepts}
+        return None
+    top_meta = getattr(top_series, "metadata", None)
+    if not top_meta:
+        return None
+    inferred_series_concept = find_concept_by_term(str(getattr(top_meta, "indicator", "") or ""))
+    if (
+        inferred_series_concept
+        and inferred_series_concept != query_concept
+        and (bool(high_signal_query_cues) or top_score < 1.5)
+    ):
+        return "inferred", {"query_concept": query_concept, "series_concept": inferred_series_concept}
+    return None
+
+
 def needs_indicator_clarification(
     qs: Any,
     query: str,
@@ -3172,6 +3288,10 @@ def needs_indicator_clarification(
     bugs (observed live: recovery fan-out after a confident skip) are
     undiagnosable without knowing WHICH invocation decided what.
     """
+    # Filled once scoring has run, so EVERY decision record (each return below
+    # is ``return _gate_log(...)``) carries the evidence it was made on.
+    _gate_ctx: Dict[str, Any] = {"top_score": None, "second_score": None, "top": None}
+
     def _gate_log(outcome: bool, branch: str, extra: Optional[Dict[str, Any]] = None) -> bool:
         try:
             params_dbg = (intent.parameters or {}) if intent else {}
@@ -3184,6 +3304,7 @@ def needs_indicator_clarification(
                 "series": len(data or []),
                 "query": str(query or "")[:60],
             }
+            payload.update(_gate_ctx)
             if extra:
                 payload.update(extra)
             logger.info("uncertainty_gate %s", json.dumps(payload))
@@ -3207,12 +3328,16 @@ def needs_indicator_clarification(
     # relevance (observed live: an Indeed job-postings niche series became a
     # sole survivor for "jobs numbers" when its real competitors flaked —
     # exactly the guess-and-get-wrong the correctness rule forbids).
-    _is_option_validation = bool(
-        (intent.parameters or {}).get("_prefetch_option_validation")
-    ) if intent else False
+    # Uncertain-match RECOVERY candidates are the same kind of fetch: they ride
+    # the original intent's parse confidence, so before this every pinned
+    # FRED-shaped candidate skipped judgment (observed live: FRED household
+    # debt "won" recovery for a government debt-to-GDP query, unjudged).
+    _gate_params = (intent.parameters or {}) if intent else {}
+    _is_judged_candidate = _is_judged_candidate_fetch(_gate_params)
+    _is_recovery_candidate = bool(_gate_params.get("_uncertain_recovery_attempted"))
 
     if (
-        not _is_option_validation
+        not _is_judged_candidate
         and intent and intent.confidence and intent.confidence >= 0.90
     ):
         indicator = (intent.parameters or {}).get("indicator", "")
@@ -3239,6 +3364,13 @@ def needs_indicator_clarification(
     second_score = scored[1][0] if len(scored) > 1 else -999.0
     score_gap = top_score - second_score if len(scored) > 1 else 99.0
     top_meta = getattr(top_series, "metadata", None)
+    _gate_ctx["top_score"] = round(float(top_score), 3)
+    _gate_ctx["second_score"] = round(float(second_score), 3) if len(scored) > 1 else None
+    try:
+        _ctx_provider, _ctx_code = qs._extract_series_provider_and_code(top_series)
+        _gate_ctx["top"] = f"{_ctx_provider}:{_ctx_code}"
+    except Exception:
+        pass
     query_cues = _extract_indicator_cues(query)
     top_series_cues = _extract_indicator_cues(_series_text_for_relevance(top_series))
     high_signal_query_cues = {
@@ -3286,6 +3418,29 @@ def needs_indicator_clarification(
     has_consensus_indicator = len(normalized_indicator_keys) == 1 and len(scored) >= 2
 
     aligned_high_signal = (not high_signal_query_cues) or bool(high_signal_query_cues & top_series_cues)
+
+    # A recovery candidate is about to REPLACE served data, so the catalog's
+    # own concept evidence (the SAME check served data gets below) must be
+    # consulted BEFORE lexical confidence: a candidate whose catalog concept
+    # differs from the query's is wrong data however many title words it
+    # shares (household debt vs a government debt query). Scoped to recovery
+    # candidates only: the main path / option validation keep their order.
+    if _is_recovery_candidate:
+        try:
+            _rc_conflict = _catalog_concept_conflict(
+                qs, query, intent, top_series,
+                high_signal_query_cues=high_signal_query_cues, top_score=top_score,
+            )
+        except Exception as exc:
+            _rc_conflict = None
+            _gate_ctx["concept_check_error"] = type(exc).__name__
+        if _rc_conflict:
+            return _gate_log(
+                True,
+                "recovery_concept_mismatch",
+                {"kind": _rc_conflict[0], **_rc_conflict[1]},
+            )
+
     if top_score >= 1.0 and aligned_high_signal and (
         has_consensus_code
         or has_consensus_indicator
@@ -3297,44 +3452,28 @@ def needs_indicator_clarification(
     top_provider = normalize_provider_name(str(getattr(top_meta, "source", "") or "")) if top_meta else ""
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(query) or "")
     if explicit_provider and top_provider == explicit_provider and top_score >= 0.8 and aligned_high_signal:
-        return False
+        return _gate_log(False, "explicit_provider_aligned")
 
     if "hicp" in query_cues and "hicp" in top_series_cues and top_score >= 0.8:
-        return False
+        return _gate_log(False, "hicp_aligned")
     if "gdp_deflator" in query_cues and "gdp_deflator" in top_series_cues and top_score >= 0.8:
-        return False
+        return _gate_log(False, "gdp_deflator_aligned")
     if "trade_openness" in query_cues and "trade_openness" in top_series_cues and top_score >= 0.8:
-        return False
+        return _gate_log(False, "trade_openness_aligned")
 
     try:
-        from .catalog_service import find_concept_by_term, find_concepts_by_code
-
-        query_concept = find_concept_by_term(query)
-        if not query_concept and intent and intent.originalQuery:
-            query_concept = find_concept_by_term(str(intent.originalQuery))
-
-        if query_concept:
-            top_provider_name, top_code = qs._extract_series_provider_and_code(top_series)
-            top_series_concepts = (
-                find_concepts_by_code(top_provider_name, top_code)
-                if top_provider_name and top_code
-                else []
-            )
-            if top_series_concepts and query_concept not in top_series_concepts:
-                return True
-
-            if not top_series_concepts and top_meta:
-                inferred_series_concept = find_concept_by_term(
-                    str(getattr(top_meta, "indicator", "") or "")
-                )
-                if (
-                    inferred_series_concept
-                    and inferred_series_concept != query_concept
-                    and (bool(high_signal_query_cues) or top_score < 1.5)
-                ):
-                    return True
-    except Exception:
-        pass
+        concept_conflict = _catalog_concept_conflict(
+            qs, query, intent, top_series,
+            high_signal_query_cues=high_signal_query_cues, top_score=top_score,
+        )
+        if concept_conflict and concept_conflict[0] == "mapped":
+            return _gate_log(True, "concept_mismatch_mapped", concept_conflict[1])
+        if concept_conflict:
+            return _gate_log(True, "concept_mismatch_inferred", concept_conflict[1])
+    except Exception as exc:
+        # Swallowed as before, but no longer silent: the decision record
+        # carries the failure so a broken concept catalog is visible.
+        _gate_ctx["concept_check_error"] = type(exc).__name__
 
 
     if (
@@ -3342,20 +3481,20 @@ def needs_indicator_clarification(
         and (high_signal_query_cues & top_series_cues)
         and top_score >= 0.55
     ):
-        return False
+        return _gate_log(False, "temporal_split_aligned")
 
     if "debt_gdp_ratio" in query_cues and "debt_gdp_ratio" not in top_series_cues:
-        return True
+        return _gate_log(True, "debt_ratio_cue")
     if (
         "public_debt" in query_cues
         and "public_debt" not in top_series_cues
         and ("debt_service" in top_series_cues or "credit" in top_series_cues)
     ):
-        return True
+        return _gate_log(True, "public_debt_credit")
     if (high_signal_query_cues & strict_cues) and not (high_signal_query_cues & top_series_cues) and top_score < 0.8:
-        return True
+        return _gate_log(True, "strict_cue_low_score")
     if top_score < 0.25:
-        return True
+        return _gate_log(True, "low_top_score")
 
     if len(scored) > 1:
         if score_gap < 0.2 and top_score < 0.7:
@@ -3379,9 +3518,9 @@ def needs_indicator_clarification(
                         "selection_authority_near_tie",
                         {"picked_code": authority_code},
                     )
-                return True
+                return _gate_log(True, "near_tie_no_authority")
 
-    return False
+    return _gate_log(False, "fallthrough")
 
 
 # ====================================================================
@@ -3488,6 +3627,50 @@ def build_uncertain_result_clarification(
     mismatch_hint = build_indicator_mismatch_hint(query, top_series)
     directional_conflict = _has_directional_conflict(high_signal_query_cues, top_series_cues)
     severe_mismatch = bool(mismatch_hint) and (directional_conflict or top_score < 0.25)
+    if (
+        len(options) >= 2
+        and top_meta
+        and not severe_mismatch
+        and not directional_conflict
+        and top_score >= 0.25
+    ):
+        # The SERVED series must stay selectable. With >= 2 collected options
+        # it was shown only as "Current match:" text, so the data already in
+        # hand (often the LLM's correct pick) could not be chosen (observed
+        # live: a social-financing menu offered three unrelated series but not
+        # the fetched CN_SF_INCREMENT). Same option format and the same
+        # dedupe/supportability chokepoint as every other option; the
+        # "Current match:" question line labels it. Never offered when the
+        # gate's own HARD evidence marks it wrong (directional conflict, or
+        # top_score < 0.25 -- the gate's low_top_score threshold). Placed
+        # first only when no mismatch hint exists, otherwise last. At most one
+        # option is added, so no collected option is dropped (3 + 1 = 4).
+        served_provider, served_code = qs._extract_series_provider_and_code(top_series)
+        served_provider = normalize_provider_name(served_provider or "")
+        served_code = str(served_code or "").strip()
+        option_keys = set()
+        for option in options:
+            parsed_option = parse_indicator_option(option)
+            if parsed_option:
+                option_keys.add((parsed_option[0], str(parsed_option[1]).strip().upper()))
+        if (
+            served_provider
+            and served_code
+            and not _is_placeholder_indicator_code(served_code)
+            and (served_provider, served_code.upper()) not in option_keys
+        ):
+            served_name = format_indicator_option_name(
+                qs=qs,
+                provider=served_provider,
+                code=served_code,
+                name=getattr(top_meta, "indicator", "") or "",
+                metadata={"description": str(getattr(top_meta, "description", "") or "")},
+            )
+            served_option = f"[{served_provider}] {served_name} ({served_code})"
+            options = dedupe_indicator_choice_options(
+                qs,
+                [served_option, *options] if not mismatch_hint else [*options, served_option],
+            )
     distinct_options: set[tuple[str, str]] = set()
     for option in options:
         parsed = parse_indicator_option(option)

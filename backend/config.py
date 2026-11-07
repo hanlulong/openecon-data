@@ -127,7 +127,14 @@ class Settings(BaseSettings):
     use_outcome_decision_stage: bool = Field(
         default=False,
         alias="USE_OUTCOME_DECISION_STAGE",
-        description="Enable the shared prefetch outcome-decision stage for direct-answer vs clarify vs unsupported control flow"
+        description=(
+            "Count-based scaffold, no LLM adjudication "
+            "(semantic_match_judge.decide_prefetch_outcome): when enabled it "
+            "bypasses the primary-accepted direct-answer early returns and "
+            "clarifies whenever >=2 executable options exist, widening menus "
+            "up to CandidateEvidenceBuilder.MAX_CLARIFICATION_LIMIT (10). "
+            "Not the menu-quality fix; keep OFF."
+        ),
     )
     use_minimal_execution_plan: bool = Field(
         default=False,
