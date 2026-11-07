@@ -97,7 +97,7 @@ def test_worldbank_preserves_explicit_canonical_group_members(worldbank, phrase,
 @pytest.mark.parametrize("alias,expected", [
     ("EU", "EU27_2020"), ("European Union", "EU27_2020"),
     ("European_Union", "EU27_2020"), (" European   Union ", "EU27_2020"),
-    ("Euro area", "EA20"), ("Euro_area", "EA20"), ("Eurozone", "EA20"),
+    ("Euro area", "EA"), ("Euro_area", "EA"), ("Eurozone", "EA"), ("EA19", "EA"),
     ("EU_27", "EU27_2020"), ("EU27_2020", "EU27_2020"), ("EA20", "EA20"),
     ("Germany", "DE"), ("Greece", "EL"), ("Czech Republic", "CZ"),
 ])
@@ -150,7 +150,7 @@ async def test_worldbank_fetch_dispatch_preserves_requested_geography(
 @pytest.mark.parametrize("country,expected", [
     *((country, country.upper()) for country in UNRESOLVED_EUROPE),
     ("European Union", "EU27_2020"), ("European_Union", "EU27_2020"),
-    ("Euro area", "EA20"), ("EU27_2020", "EU27_2020"),
+    ("Euro area", "EA"), ("EU27_2020", "EU27_2020"),
     ("EA20", "EA20"), ("Germany", "DE"),
 ])
 async def test_eurostat_fetch_dispatch_preserves_requested_geography(

@@ -147,8 +147,14 @@ def provider_covers_country_list(provider: str, countries: Optional[List[str]]) 
     if provider_upper == "FRED":
         return all(_fred_catalog_covers_country(code) for code in normalized_iso2)
     if provider_upper == "EUROSTAT":
+        # Aggregate codes are recognized by Eurostat's code grammar (EA, EA21,
+        # EU27_2020, ...), not a fixed set: the provider now serves whichever
+        # composition code a dataset publishes (EA21 since 2026), and that code
+        # flows back through conversation state on the next turn.
+        from ..providers.eurostat import eurostat_aggregate_geo_family
+
         return all(
-            code in {"EU", "EA", "EA19", "EA20", "EU27_2020"} or CountryResolver.is_eu_member(code)
+            eurostat_aggregate_geo_family(code) is not None or CountryResolver.is_eu_member(code)
             for code in normalized_iso2
         )
     if provider_upper == "OECD":
