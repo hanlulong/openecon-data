@@ -340,3 +340,5 @@ This product uses the FRED® API but is not endorsed or certified by the Federal
 ## 许可证
 
 [AGPL-3.0](LICENSE) —— 可自由使用、修改与自托管。若你以服务形式运行修改后的版本，须公开你的修改。商业授权请[联系我们](mailto:security@openecon.ai)。
+
+版权声明、“或（由你选择）任何更新版本”的授权，以及许可证变更前的提交以 MIT 许可发布的说明，见 [NOTICE](NOTICE)。

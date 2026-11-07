@@ -341,3 +341,5 @@ If you find this useful, a star helps others discover the project.
 ## License
 
 [AGPL-3.0](LICENSE) — Free to use, modify, and self-host. If you run a modified version as a service, you must share your changes. For commercial licensing, [contact us](mailto:security@openecon.ai).
+
+The copyright line, the "or (at your option) any later version" grant and the note that commits before the license change were released under MIT are in [NOTICE](NOTICE).
