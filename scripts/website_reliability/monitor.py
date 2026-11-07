@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures
 import datetime
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -167,7 +168,33 @@ def failure_details(checks):
             allowed = {"website_probe_timeout", "website_probe_failed", "invalid_or_incomplete_website_results"}
             details[name] = {"reason": reason if isinstance(reason, str) and reason in allowed else "probe_failed"}
             try:
-                details[name]["failed_checks"] = website_summary(check)["failed_checks"]
+                summary = website_summary(check)
+                details[name]["failed_checks"] = summary["failed_checks"]
+                failed = set(summary["failed_checks"])
+                probes = []
+                for row in summary["results"]:
+                    host, scheme, family = row["host"], row["scheme"], row["ip_family"]
+                    if (
+                        type(host) is not str or type(scheme) is not str or type(family) is not int
+                        or (host, scheme, family) not in JOBS
+                        or f"{host}:{scheme}:IPv{family}" not in failed
+                    ):
+                        continue
+                    probe = {"host": host, "scheme": scheme, "ip_family": family}
+                    for key in ("tls_verified", "canonical_target_verified"):
+                        if type(row.get(key)) is bool:
+                            probe[key] = row[key]
+                    code = row.get("curl_exit_code")
+                    if type(code) is int and 0 <= code <= 255:
+                        probe["curl_exit_code"] = code
+                    status = row.get("http_status")
+                    if type(status) is int and (status == 0 or 100 <= status <= 599):
+                        probe["http_status"] = status
+                    elapsed = row.get("elapsed_seconds")
+                    if type(elapsed) in (int, float) and 0 <= elapsed <= 60 and math.isfinite(elapsed):
+                        probe["elapsed_seconds"] = elapsed
+                    probes.append(probe)
+                details[name]["failed_probe_details"] = probes
             except (ValueError, TypeError, KeyError, AttributeError):
                 pass
         elif name == "backends":

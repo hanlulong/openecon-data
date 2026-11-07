@@ -463,6 +463,87 @@ def test_fresh_non_mcp_failures_retain_their_real_failure_names(tmp_path, failed
     assert "SECRET" not in json.dumps(result)
 
 
+def test_saved_website_failure_preserves_only_failed_probe_diagnostics(tmp_path):
+    report = complete_saved_report(degraded=True)
+    report.update(status="FAILED", failed_checks=["websites"])
+    check = report["checks"]["websites"]
+    check["ok"] = False
+    rows = [row for row in check["results"] if row["host"] == "luhan.io"][:2]
+    rows[0].update(curl_exit_code=28, http_status=0, tls_verified=False, elapsed_seconds=12.001)
+    rows[1].update(http_status=500, elapsed_seconds=0.3)
+    for row in rows:
+        row.update(stderr="SECRET", url_effective="https://SECRET/", body="SECRET", diagnostic="SECRET")
+    target = tmp_path / "latest.json"
+    target.write_text(json.dumps(report))
+
+    result = monitor.saved_status(target)
+
+    assert result["status"] == "FAILED"
+    assert result["failed_checks"] == ["websites"]
+    assert result["known_degraded"] == sorted(websites.KNOWN_DOWN)
+    detail = result["failure_details"]["websites"]
+    assert len(detail["failed_checks"]) == len(detail["failed_probe_details"]) == 2
+    assert detail["failed_probe_details"] == [
+        {key: row[key] for key in (
+            "host", "scheme", "ip_family", "curl_exit_code", "http_status",
+            "tls_verified", "canonical_target_verified", "elapsed_seconds",
+        )} for row in rows
+    ]
+    assert "SECRET" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("curl_exit_code", "SECRET"), ("curl_exit_code", True),
+    ("curl_exit_code", -1), ("curl_exit_code", 256), ("curl_exit_code", 28.0),
+    ("http_status", "SECRET"), ("http_status", True),
+    ("http_status", -1), ("http_status", 99), ("http_status", 600),
+    ("http_status", 500.0),
+    ("tls_verified", "SECRET"), ("tls_verified", 1),
+    ("canonical_target_verified", "SECRET"), ("canonical_target_verified", 0),
+    ("elapsed_seconds", "SECRET"), ("elapsed_seconds", True),
+    ("elapsed_seconds", -1), ("elapsed_seconds", 61),
+    ("elapsed_seconds", float("nan")), ("elapsed_seconds", float("inf")),
+    ("elapsed_seconds", -float("inf")), ("elapsed_seconds", 10 ** 1000),
+])
+def test_website_failure_diagnostics_drop_invalid_field_types_and_ranges(field, value):
+    check = website_report()
+    check["ok"] = False
+    row = check["results"][0]
+    row.update(http_status=500, canonical_target_verified=False)
+    row[field] = value
+
+    details = monitor.failure_details({"websites": check})
+
+    probe = details["websites"]["failed_probe_details"][0]
+    assert field not in probe
+    assert "SECRET" not in json.dumps(details, allow_nan=False)
+
+
+@pytest.mark.parametrize("field", ["host", "scheme", "ip_family"])
+def test_unknown_website_jobs_cannot_be_reflected_in_failure_diagnostics(field):
+    check = website_report()
+    check["ok"] = False
+    check["results"][0].update(http_status=500)
+    check["results"][0][field] = "SECRET"
+
+    details = monitor.failure_details({"websites": check})
+
+    assert details == {"websites": {"reason": "probe_failed"}}
+    assert "SECRET" not in json.dumps(details)
+
+
+def test_website_failure_diagnostics_remain_bounded_to_exact_inventory():
+    check = website_report()
+    check["ok"] = False
+    for row in check["results"]:
+        row.update(curl_exit_code=28, http_status=0)
+    details = monitor.failure_details({"websites": check})
+    assert len(details["websites"]["failed_probe_details"]) == len(websites.JOBS)
+
+    check["results"].append(copy.deepcopy(check["results"][0]))
+    assert monitor.failure_details({"websites": check}) == {"websites": {"reason": "probe_failed"}}
+
+
 @pytest.mark.parametrize("contradiction", ["timeout", "error"])
 def test_mcp_success_flags_cannot_override_timeout_or_error_diagnostic(monkeypatch, contradiction):
     body = {"ok": True, "head_status": 405, "initialized": True, "tools_listed": True,
