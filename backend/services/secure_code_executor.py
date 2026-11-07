@@ -57,7 +57,18 @@ class SecurityValidator:
         'webbrowser', 'antigravity', 'this',
         'pickle', 'shelve', 'dill',  # Pickle vulnerabilities
         'inspect', 'types', 'gc', '__main__', 'pdb',  # Reflection/debugging escape vectors
+        # Low-level OS backends exposing the same primitives as DANGEROUS_OS_ATTRS
+        # without going through the `os` attribute checks.
+        'posix', 'nt', '_posixsubprocess',
+        # Event-loop/raw-I/O/network layers and the backend's own datastore
+        # client; analysis code uses synchronous httpx and never needs these.
+        'asyncio', 'selectors', 'ssl', 'redis',
     }
+
+    # Method names that create links or change file modes. Rejected on ANY
+    # receiver (pathlib.Path, os aliases, re-exported modules), since output
+    # files are what gets published and analysis code never needs them.
+    LINK_AND_MODE_CALLS = {'symlink_to', 'hardlink_to', 'link_to', 'chmod', 'lchmod'}
 
     # Modules allowed because the wrapper already provides them,
     # but with dangerous attribute access blocked (see DANGEROUS_OS_ATTRS).
@@ -142,6 +153,7 @@ class SecurityValidator:
 
         try:
             tree = ast.parse(code)
+            self._module_aliases = self._collect_module_aliases(tree)
             self._check_ast(tree)
 
             # Additional string-based checks for obfuscation attempts
@@ -152,6 +164,25 @@ class SecurityValidator:
         except SyntaxError as e:
             self.violations.append(f"Syntax error: {e}")
             return False, self.violations, self.warnings
+
+    def _collect_module_aliases(self, tree: ast.AST) -> Dict[str, str]:
+        """Map every local name bound by `import <wrapper module> as <name>` to
+        the module, so the os/sys attribute checks apply through aliases.
+
+        Collected over the WHOLE tree before checking (flow-insensitive), so an
+        alias bound later in the file or inside a function is still covered.
+        `import os.path as p` binds the submodule, not os, and is not aliased.
+        """
+        aliases = {m: m for m in self.WRAPPER_PROVIDED_MODULES}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname and alias.name in self.WRAPPER_PROVIDED_MODULES:
+                        aliases[alias.asname] = alias.name
+        return aliases
+
+    def _resolve_module_name(self, name: str) -> Optional[str]:
+        return getattr(self, "_module_aliases", {}).get(name)
 
     def _check_ast(self, node: ast.AST) -> None:
         """Recursively check AST nodes for security issues"""
@@ -216,13 +247,25 @@ class SecurityValidator:
                         else set()
                     )
                     for alias in node.names:
-                        if alias.name in dangerous_attrs:
+                        if alias.name == '*':
+                            # A star-import binds every dangerous name directly,
+                            # bypassing both the per-name and attribute checks.
+                            self.violations.append(
+                                f"Forbidden {module} import: star-import at line {node.lineno}"
+                            )
+                        elif alias.name in dangerous_attrs:
                             self.violations.append(
                                 f"Forbidden {module} import: {module}.{alias.name} at line {node.lineno}"
                             )
 
     def _check_call(self, node: ast.Call) -> None:
         """Check function calls for dangerous operations"""
+        if isinstance(node.func, ast.Attribute) and node.func.attr in self.LINK_AND_MODE_CALLS:
+            self.violations.append(
+                f"Forbidden link/permission call: .{node.func.attr}() at line {node.lineno}"
+            )
+            return
+
         func_name = self._get_call_name(node)
 
         if not func_name:
@@ -262,12 +305,14 @@ class SecurityValidator:
             )
 
         # Block dangerous os.* operations (os module is allowed for os.path, os.makedirs, etc.)
+        # The receiver is resolved through import aliases (import os as o).
         if isinstance(node.value, ast.Name):
-            if node.value.id == 'os' and node.attr in self.DANGEROUS_OS_ATTRS:
+            module = self._resolve_module_name(node.value.id)
+            if module == 'os' and node.attr in self.DANGEROUS_OS_ATTRS:
                 self.violations.append(
                     f"Forbidden os operation: os.{node.attr} at line {node.lineno}"
                 )
-            elif node.value.id == 'sys' and node.attr in self.DANGEROUS_SYS_ATTRS:
+            elif module == 'sys' and node.attr in self.DANGEROUS_SYS_ATTRS:
                 self.violations.append(
                     f"Forbidden sys operation: sys.{node.attr} at line {node.lineno}"
                 )
