@@ -1,7 +1,7 @@
 import os
 import sys
 from functools import lru_cache
-from typing import List
+from typing import List, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,7 +44,12 @@ class Settings(BaseSettings):
 
     jwt_secret: str = Field(..., alias="JWT_SECRET")  # Required - no insecure default
     jwt_expiration_days: int = Field(default=7, alias="JWT_EXPIRES_DAYS")
-    allowed_origins: List[str] = Field(
+    # Union[List[str], str]: pydantic-settings JSON-decodes List[str] fields
+    # from .env/env, so the documented comma form
+    # (ALLOWED_ORIGINS=http://a,http://b) raised SettingsError at startup.
+    # With str in the union the raw value reaches parse_origins, which always
+    # returns a list (comma, JSON-list and single-URL forms all work).
+    allowed_origins: Union[List[str], str] = Field(
         default_factory=lambda: [],  # Changed from ["*"] to require explicit configuration
         alias="ALLOWED_ORIGINS"
     )
@@ -52,7 +57,8 @@ class Settings(BaseSettings):
     # Trusted reverse-proxy source IPs whose X-Forwarded-For header is honored.
     # Default: loopback only (Apache/nginx on same host). For CDN/LB termination,
     # set TRUSTED_PROXIES to the comma-separated source IPs (or CIDRs not supported here).
-    trusted_proxies: List[str] = Field(
+    # Same Union[List[str], str] reason as allowed_origins.
+    trusted_proxies: Union[List[str], str] = Field(
         default_factory=lambda: ["127.0.0.1", "::1"],
         alias="TRUSTED_PROXIES",
         description="IPs whose X-Forwarded-For header is trusted for client-IP attribution"
