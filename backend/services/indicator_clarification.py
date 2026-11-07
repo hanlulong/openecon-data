@@ -66,11 +66,59 @@ from ..utils.processing_steps import (
 )
 from ..utils.retry import retry_async
 from .semantic_match_judge import decide_prefetch_outcome
+from .user_messages import get_message
 
 if TYPE_CHECKING:
     from ..services.query_pipeline import ParseRouteResult, ValidationResult
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Clarification chrome localization (STRUCTURAL presentation only)
+# ---------------------------------------------------------------------------
+
+def clarification_language(
+    intent: Optional[Any] = None,
+    pending: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """The ONE place that decides which language clarification chrome renders in.
+
+    Precedence: the language persisted with a pending clarification payload
+    (the turn that BUILT the menu — a bare "2" reply carries no language signal
+    of its own, so the reply turn's parse must not flip a zh conversation back
+    to English), then ``intent.language`` as set by the parse LLM (intents
+    rebuilt from conversation state carry ``state.language`` already), then
+    None (English). Never inspects query text: language detection is the parse
+    LLM's job, this only routes an already-detected tag.
+    """
+    if isinstance(pending, dict):
+        lang = pending.get("language")
+        if not lang:
+            raw_intent = pending.get("intent")
+            if isinstance(raw_intent, dict):
+                lang = raw_intent.get("language")
+        if lang:
+            return str(lang)
+    lang = getattr(intent, "language", None) if intent is not None else None
+    return str(lang) if lang else None
+
+
+def _chrome(message_id: str, language: Optional[str], default: str, **kwargs: Any) -> str:
+    """Render one clarification-chrome line via the user_messages catalog.
+
+    ``default`` is the English literal the call site always rendered; it is
+    used only if the catalog misses the id, so a catalog gap can never produce
+    an empty menu line. Option labels that are provider titles, option values,
+    and series ids must never be passed through here.
+    """
+    text = get_message(message_id, language, **kwargs)
+    if text:
+        return text
+    try:
+        return default.format(**kwargs)
+    except (KeyError, IndexError, ValueError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +326,8 @@ def store_pending_indicator_options(
         "intent": intent.model_dump() if hasattr(intent, "model_dump") else None,
         "options": [str(option) for option in clean_options if str(option).strip()],
         "question_lines": [str(line) for line in (question_lines or []) if str(line).strip()],
+        # Reply-turn chrome renders in the language that built this menu.
+        "language": clarification_language(intent),
     }
     try:
         conversation_manager.set_pending_indicator_options(conversation_id, payload)
@@ -516,7 +566,11 @@ async def try_resolve_pending_indicator_choice(
                 clarificationNeeded=True,
                 clarificationQuestions=pending.get("question_lines") or [],
                 clarificationOptions=build_clarification_options(qs, options),
-                message="Please choose one of the listed option numbers.",
+                message=_chrome(
+                    "clarify_invalid_option_number",
+                    clarification_language(pending=pending),
+                    "Please choose one of the listed option numbers.",
+                ),
                 processingSteps=tracker.to_list() if tracker else None,
             )
 
@@ -959,19 +1013,36 @@ def build_no_reliable_indicator_match_response(
     """Return a clarification instead of guessing when no reliable option remains."""
     query_text = str(query or intent.originalQuery or "").strip()
     target_countries = qs._collect_target_countries(intent.parameters)
+    lang = clarification_language(intent)
     questions = [
-        "I could not find a reliable indicator and provider combination for this request without guessing.",
+        _chrome(
+            "clarify_no_reliable_match",
+            lang,
+            "I could not find a reliable indicator and provider combination for this request without guessing.",
+        ),
     ]
     if target_countries and len(target_countries) > 8 and qs._is_comparison_query(query_text):
         questions.append(
-            "Large cross-country comparisons are the hardest case here, and the current metric is not reliably available across the full scope."
+            _chrome(
+                "clarify_no_reliable_large_comparison",
+                lang,
+                "Large cross-country comparisons are the hardest case here, and the current metric is not reliably available across the full scope.",
+            )
         )
         questions.append(
-            "Try a smaller country set, ask for one overall group value, or choose a different metric wording."
+            _chrome(
+                "clarify_no_reliable_large_comparison_hint",
+                lang,
+                "Try a smaller country set, ask for one overall group value, or choose a different metric wording.",
+            )
         )
     else:
         questions.append(
-            "Please rephrase with a more specific metric, narrower geography, or different provider scope."
+            _chrome(
+                "clarify_no_reliable_rephrase",
+                lang,
+                "Please rephrase with a more specific metric, narrower geography, or different provider scope.",
+            )
         )
 
     return QueryResponse(
@@ -979,7 +1050,11 @@ def build_no_reliable_indicator_match_response(
         intent=intent,
         clarificationNeeded=True,
         clarificationQuestions=questions,
-        message="I stopped before fetching because the available matches were not reliable enough.",
+        message=_chrome(
+            "clarify_no_reliable_message",
+            lang,
+            "I stopped before fetching because the available matches were not reliable enough.",
+        ),
         processingSteps=processing_steps,
     )
 
@@ -1382,17 +1457,35 @@ def build_multi_concept_query_clarification(
     detected_labels = [group_labels.get(group, group) for group in sorted(concept_groups)]
     options = qs._collect_indicator_choice_options(query, intent, max_options=4)
 
+    lang = clarification_language(intent)
     clarification_questions = [
-        "Your query mixes multiple indicator families, which can lead to partial or incorrect results in one fetch.",
-        f"I detected: {', '.join(detected_labels)}.",
-        "Please choose the first indicator focus to fetch accurately:",
+        _chrome(
+            "clarify_multi_family_header",
+            lang,
+            "Your query mixes multiple indicator families, which can lead to partial or incorrect results in one fetch.",
+        ),
+        _chrome(
+            "clarify_multi_family_detected",
+            lang,
+            "I detected: {families}.",
+            families=", ".join(detected_labels),
+        ),
+        _chrome(
+            "clarify_multi_family_choose",
+            lang,
+            "Please choose the first indicator focus to fetch accurately:",
+        ),
     ]
     if options:
         clarification_questions.extend(
             f"{idx}. {option}" for idx, option in enumerate(options, start=1)
         )
         clarification_questions.append(
-            "Reply with the option number (for example, 1) or the exact indicator you want first."
+            _chrome(
+                "clarify_multi_family_reply_hint",
+                lang,
+                "Reply with the option number (for example, 1) or the exact indicator you want first.",
+            )
         )
         store_pending_indicator_options(
             qs=qs,
@@ -1404,7 +1497,11 @@ def build_multi_concept_query_clarification(
         )
     else:
         clarification_questions.append(
-            "Reply with the exact indicator focus first (for example: unemployment rate, CPI inflation, or government debt-to-GDP)."
+            _chrome(
+                "clarify_multi_family_no_options_hint",
+                lang,
+                "Reply with the exact indicator focus first (for example: unemployment rate, CPI inflation, or government debt-to-GDP).",
+            )
         )
 
     return QueryResponse(
@@ -2148,28 +2245,51 @@ def build_group_scope_clarification(
         return None
 
     region_label = humanize_region_name(region)
+    lang = clarification_language(intent)
+    # Labels are system text (localized); VALUES are executed rewritten
+    # queries and stay byte-identical in every language.
     options = [
         ClarificationOption(
             id="1",
-            label="compare member countries",
+            label=_chrome(
+                "clarify_group_scope_option_compare", lang, "compare member countries"
+            ),
             value=rewrite_group_scope_query(query, region, "compare_members"),
         ),
         ClarificationOption(
             id="2",
-            label="one overall group value (aggregate/average if available)",
+            label=_chrome(
+                "clarify_group_scope_option_group_value",
+                lang,
+                "one overall group value (aggregate/average if available)",
+            ),
             value=rewrite_group_scope_query(query, region, "group_value"),
         ),
     ]
 
     clarification_questions = [
-        f"Your query mentions {region_label}, but the scope is still ambiguous.",
-        f"Do you want to compare {region_label} member countries, or ask for one overall value for the group?",
+        _chrome(
+            "clarify_group_scope_ambiguous",
+            lang,
+            "Your query mentions {region}, but the scope is still ambiguous.",
+            region=region_label,
+        ),
+        _chrome(
+            "clarify_group_scope_question",
+            lang,
+            "Do you want to compare {region} member countries, or ask for one overall value for the group?",
+            region=region_label,
+        ),
     ]
     clarification_questions.extend(
         f"{option.id}. {option.label}" for option in options
     )
     clarification_questions.append(
-        "Reply with the option number, or type a different scope."
+        _chrome(
+            "clarify_group_scope_reply_hint",
+            lang,
+            "Reply with the option number, or type a different scope.",
+        )
     )
 
     payload = {
@@ -2178,6 +2298,7 @@ def build_group_scope_clarification(
         "original_query": str(query or "").strip(),
         "question_lines": clarification_questions,
         "options": [option.model_dump() for option in options],
+        "language": lang,
     }
     store_pending_semantic_clarification(conversation_id, payload)
 
@@ -2232,8 +2353,18 @@ def build_missing_decomposition_entities_clarification(
         return None
 
     query_text = str(query or intent.originalQuery or "").strip()
-    category_label = "category" if decomp_type in {"category", "categories"} else "breakdown member"
-    category_plural = "categories" if category_label == "category" else "breakdown members"
+    is_category = decomp_type in {"category", "categories"}
+    lang = clarification_language(intent)
+    category_label = (
+        _chrome("clarify_decomp_noun_category", lang, "category")
+        if is_category
+        else _chrome("clarify_decomp_noun_member", lang, "breakdown member")
+    )
+    category_plural = (
+        _chrome("clarify_decomp_noun_categories", lang, "categories")
+        if is_category
+        else _chrome("clarify_decomp_noun_members", lang, "breakdown members")
+    )
     base_query = query_text or "this query"
     overall_value = re.sub(
         r"\s+\bby\s+(?:category|categories|dimension|dimensions|component|components|breakdown)\b",
@@ -2246,24 +2377,47 @@ def build_missing_decomposition_entities_clarification(
     options = [
         ClarificationOption(
             id="1",
-            label=f"specify {category_plural}",
+            label=_chrome(
+                "clarify_decomp_option_specify",
+                lang,
+                "specify {category_plural}",
+                category_plural=category_plural,
+            ),
             value=specify_value,
         ),
         ClarificationOption(
             id="2",
-            label="use the main overall series",
+            label=_chrome(
+                "clarify_decomp_option_overall", lang, "use the main overall series"
+            ),
             value=overall_value,
         ),
     ]
     clarification_questions = [
-        f"Your query asks for a {category_label} breakdown, but no specific {category_plural} were named.",
-        f"Which {category_plural} should I use?",
+        _chrome(
+            "clarify_decomp_missing",
+            lang,
+            "Your query asks for a {category_label} breakdown, but no specific {category_plural} were named.",
+            category_label=category_label,
+            category_plural=category_plural,
+        ),
+        _chrome(
+            "clarify_decomp_question",
+            lang,
+            "Which {category_plural} should I use?",
+            category_plural=category_plural,
+        ),
     ]
     clarification_questions.extend(
         f"{option.id}. {option.label}" for option in options
     )
     clarification_questions.append(
-        f"Reply with the option number, or type the specific {category_plural} you want."
+        _chrome(
+            "clarify_decomp_reply_hint",
+            lang,
+            "Reply with the option number, or type the specific {category_plural} you want.",
+            category_plural=category_plural,
+        )
     )
 
     payload = {
@@ -2272,6 +2426,7 @@ def build_missing_decomposition_entities_clarification(
         "original_query": base_query,
         "question_lines": clarification_questions,
         "options": [option.model_dump() for option in options],
+        "language": lang,
     }
     store_pending_semantic_clarification(conversation_id, payload)
 
@@ -2304,10 +2459,23 @@ def build_unspecified_geography_breakdown_clarification(
     if CountryResolver.detect_regions_in_query(query_text):
         return None
 
+    lang = clarification_language(intent)
     clarification_questions = [
-        "Your query asks for a geographic breakdown, but it does not name the geography to break down.",
-        "If you want a subnational breakdown, name the country first (for example: 'Canada employment by province').",
-        "If you want a multi-country group, name the region explicitly (for example: 'employment in South Asia').",
+        _chrome(
+            "clarify_geo_breakdown_missing",
+            lang,
+            "Your query asks for a geographic breakdown, but it does not name the geography to break down.",
+        ),
+        _chrome(
+            "clarify_geo_breakdown_subnational",
+            lang,
+            "If you want a subnational breakdown, name the country first (for example: 'Canada employment by province').",
+        ),
+        _chrome(
+            "clarify_geo_breakdown_group",
+            lang,
+            "If you want a multi-country group, name the region explicitly (for example: 'employment in South Asia').",
+        ),
     ]
 
     return QueryResponse(
@@ -2590,7 +2758,13 @@ def build_failed_indicator_choice_response(
         clarificationQuestions=question_lines or [],
         clarificationOptions=build_clarification_options(qs, remaining_options),
         error=error,
-        message="That option did not return usable data. Please choose a different option.",
+        # ``intent`` here is the PENDING intent (coerced from the stored
+        # payload), so this renders in the language that built the menu.
+        message=_chrome(
+            "clarify_option_failed",
+            clarification_language(intent),
+            "That option did not return usable data. Please choose a different option.",
+        ),
         processingSteps=tracker.to_list() if tracker else None,
     )
 
@@ -2716,7 +2890,15 @@ async def build_prefetch_indicator_choice_clarification(
     primary_accepted = False
     primary_relevance = -999.0
     selector_options: List[str] = []
-    current_label = f"{provider or 'Unknown provider'} routing guess"
+    lang = clarification_language(intent)
+    # No concrete series is resolved on the menu path; the zh copy says so
+    # instead of surfacing the internal "routing guess" wording.
+    current_label = _chrome(
+        "clarify_current_unresolved",
+        lang,
+        "{provider} routing guess",
+        provider=provider or _chrome("clarify_unknown_provider", lang, "Unknown provider"),
+    )
     if not current_indicator:
         try:
             from .indicator_selector import (
@@ -3059,15 +3241,30 @@ async def build_prefetch_indicator_choice_clarification(
             options = options[:max_options]
 
     clarification_questions = [
-        "I found multiple plausible indicator matches before fetching data.",
-        f"Current routed match: {current_label}",
-        "Please choose the indicator you intended:",
+        _chrome(
+            "clarify_prefetch_header",
+            lang,
+            "I found multiple plausible indicator matches before fetching data.",
+        ),
+        _chrome(
+            "clarify_current_routed_match",
+            lang,
+            "Current routed match: {label}",
+            label=current_label,
+        ),
+        _chrome(
+            "clarify_choose_intended", lang, "Please choose the indicator you intended:"
+        ),
     ]
     clarification_questions.extend(
         f"{idx}. {option}" for idx, option in enumerate(options, start=1)
     )
     clarification_questions.append(
-        "Reply with the option number (for example, 1) or the exact indicator text you want."
+        _chrome(
+            "clarify_reply_hint",
+            lang,
+            "Reply with the option number (for example, 1) or the exact indicator text you want.",
+        )
     )
 
     store_pending_indicator_options(
@@ -3211,17 +3408,43 @@ def build_low_confidence_intent_response(
     processing_steps: Optional[List[Any]] = None,
 ) -> QueryResponse:
     """Build the standard low-confidence clarification response."""
-    reason = str(confidence_reason or "I could not confidently determine the requested data.")
+    lang = clarification_language(intent)
+    reason = str(
+        confidence_reason
+        or _chrome(
+            "clarify_low_confidence_reason_default",
+            lang,
+            "I could not confidently determine the requested data.",
+        )
+    )
     return QueryResponse(
         conversationId=conversation_id,
         intent=intent,
         clarificationNeeded=True,
         clarificationQuestions=[
-            f"I'm not certain about this query: {reason}",
-            "Could you rephrase with more specific details?",
-            "Or would you like to use Pro Mode for a custom analysis?",
+            _chrome(
+                "clarify_low_confidence_uncertain",
+                lang,
+                "I'm not certain about this query: {reason}",
+                reason=reason,
+            ),
+            _chrome(
+                "clarify_low_confidence_rephrase",
+                lang,
+                "Could you rephrase with more specific details?",
+            ),
+            _chrome(
+                "clarify_low_confidence_promode",
+                lang,
+                "Or would you like to use Pro Mode for a custom analysis?",
+            ),
         ],
-        message=f"**Uncertain Query**\n{reason}\n\nPlease provide more details or use Pro Mode for better results.",
+        message=_chrome(
+            "clarify_low_confidence_message",
+            lang,
+            "**Uncertain Query**\n{reason}\n\nPlease provide more details or use Pro Mode for better results.",
+            reason=reason,
+        ),
         processingSteps=processing_steps,
     )
 
@@ -3690,6 +3913,7 @@ def build_uncertain_result_clarification(
         qs._collect_indicator_choice_options(query, intent),
     )
 
+    lang = clarification_language(intent)
     if top_meta:
         current_provider = normalize_provider_name(getattr(top_meta, "source", "") or "")
         current_code = str(getattr(top_meta, "seriesId", "") or "").strip()
@@ -3700,9 +3924,19 @@ def build_uncertain_result_clarification(
             name=getattr(top_meta, "indicator", "") or "",
             metadata={"description": str(getattr(top_meta, "description", "") or "")},
         )
-        current_label = f"{current_name} from {getattr(top_meta, 'source', 'unknown source')}"
+        current_label = _chrome(
+            "clarify_current_from",
+            lang,
+            "{name} from {provider}",
+            name=current_name,
+            provider=getattr(
+                top_meta,
+                "source",
+                _chrome("clarify_unknown_source", lang, "unknown source"),
+            ),
+        )
     else:
-        current_label = "Unknown indicator"
+        current_label = _chrome("clarify_unknown_indicator", lang, "Unknown indicator")
 
     if options and top_meta and top_score >= 0.75:
         leading_option = options[0].upper()
@@ -3801,10 +4035,20 @@ def build_uncertain_result_clarification(
         if not severe_mismatch:
             return None
         clarification_questions = [
-            "The current indicator match may be wrong for your request.",
-            f"Current match: {current_label}",
+            _chrome(
+                "clarify_severe_mismatch_header",
+                lang,
+                "The current indicator match may be wrong for your request.",
+            ),
+            _chrome(
+                "clarify_current_match", lang, "Current match: {label}", label=current_label
+            ),
             mismatch_hint,
-            "Please reply with the exact indicator name or code you want (for example, NE.IMP.GNFS.ZS).",
+            _chrome(
+                "clarify_severe_mismatch_reply",
+                lang,
+                "Please reply with the exact indicator name or code you want (for example, NE.IMP.GNFS.ZS).",
+            ),
         ]
         return QueryResponse(
             conversationId=conversation_id,
@@ -3816,17 +4060,27 @@ def build_uncertain_result_clarification(
         )
 
     clarification_questions = [
-        "I found multiple plausible indicators and the current match is uncertain.",
-        f"Current match: {current_label}",
+        _chrome(
+            "clarify_uncertain_header",
+            lang,
+            "I found multiple plausible indicators and the current match is uncertain.",
+        ),
+        _chrome("clarify_current_match", lang, "Current match: {label}", label=current_label),
     ]
     if mismatch_hint:
         clarification_questions.append(mismatch_hint)
-    clarification_questions.append("Please choose one option:")
+    clarification_questions.append(
+        _chrome("clarify_choose_one", lang, "Please choose one option:")
+    )
     clarification_questions.extend(
         f"{idx}. {option}" for idx, option in enumerate(options, start=1)
     )
     clarification_questions.append(
-        "Reply with the option number (for example, 1) or the exact indicator text you want."
+        _chrome(
+            "clarify_reply_hint",
+            lang,
+            "Reply with the option number (for example, 1) or the exact indicator text you want.",
+        )
     )
 
     store_pending_indicator_options(
@@ -3935,15 +4189,26 @@ def build_no_data_indicator_clarification(
     if len(options) < 2:
         return None
 
+    lang = clarification_language(intent)
     clarification_questions = [
-        "I couldn't find data with the current indicator selection.",
-        "Please choose the indicator you intended:",
+        _chrome(
+            "clarify_no_data_header",
+            lang,
+            "I couldn't find data with the current indicator selection.",
+        ),
+        _chrome(
+            "clarify_choose_intended", lang, "Please choose the indicator you intended:"
+        ),
     ]
     clarification_questions.extend(
         f"{idx}. {option}" for idx, option in enumerate(options, start=1)
     )
     clarification_questions.append(
-        "Reply with the option number (for example, 1) or the exact indicator text you want."
+        _chrome(
+            "clarify_reply_hint",
+            lang,
+            "Reply with the option number (for example, 1) or the exact indicator text you want.",
+        )
     )
 
     store_pending_indicator_options(

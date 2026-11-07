@@ -13,8 +13,18 @@ Design goals
 - Named-placeholder templates only (``{country}``, ``{region}`` …) so callers
   pass keyword arguments and the ordering is self-documenting.
 
-Scope is deliberately narrow: only the response strings that Proposals B and C
-localize live here. Do not grow this into a general i18n layer.
+Scope is deliberately narrow: the response strings that Proposals B and C
+localize, plus the CHROME of indicator-clarification menus (headers, "please
+choose" prompts, reply hints, retry notices, "current match" labels — the
+``clarify_*`` ids, rendered by ``indicator_clarification._chrome``). Option
+labels that are provider titles, executed option values, rewritten queries and
+series ids are NEVER localized here. Do not grow this into a general i18n layer.
+
+Reply-hint convention: every hint shown NEXT TO numbered option buttons starts
+with "Reply with the option number" (en) or "请回复选项编号" (zh); the web UI
+strips exactly those prefixes when it renders the options as buttons
+(ChatPage.tsx ``sanitizeClarificationContent``). Keep new languages' hints on
+one fixed prefix and add it there.
 """
 from __future__ import annotations
 
@@ -120,6 +130,241 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "无法获取以下指标的数据：{missing}。所显示的结果仅涵盖成功解析的指标；"
             "缺失的序列在所选数据源的此范围内可能不可用。"
         ),
+    },
+    # ------------------------------------------------------------------
+    # (5) Indicator-clarification menu chrome (indicator_clarification.py).
+    # English templates are byte-identical to the literals they replaced.
+    # Inserted fragments ({region}, {families}, {label}, {reason}, {provider},
+    # {name}) are proper-noun / provider-title / LLM-reason text and are
+    # deliberately NOT translated.
+    # ------------------------------------------------------------------
+    # Reply-turn notices: rendered in the language of the turn that BUILT the
+    # menu (a bare "2" reply carries no language signal of its own).
+    "clarify_invalid_option_number": {
+        "en": "Please choose one of the listed option numbers.",
+        "zh": "请从列出的选项编号中选择一个。",
+    },
+    "clarify_option_failed": {
+        "en": "That option did not return usable data. Please choose a different option.",
+        "zh": "该选项未返回可用数据，请选择其他选项。",
+    },
+    # No reliable match.
+    "clarify_no_reliable_match": {
+        "en": (
+            "I could not find a reliable indicator and provider combination for "
+            "this request without guessing."
+        ),
+        "zh": "在不进行猜测的前提下，我无法为此请求找到可靠的指标与数据源组合。",
+    },
+    "clarify_no_reliable_large_comparison": {
+        "en": (
+            "Large cross-country comparisons are the hardest case here, and the "
+            "current metric is not reliably available across the full scope."
+        ),
+        "zh": "大范围的跨国比较是最难处理的情况，当前指标无法在整个范围内可靠获取。",
+    },
+    "clarify_no_reliable_large_comparison_hint": {
+        "en": (
+            "Try a smaller country set, ask for one overall group value, or "
+            "choose a different metric wording."
+        ),
+        "zh": "请尝试缩小国家范围、改为查询区域整体数值，或换一种指标表述。",
+    },
+    "clarify_no_reliable_rephrase": {
+        "en": (
+            "Please rephrase with a more specific metric, narrower geography, or "
+            "different provider scope."
+        ),
+        "zh": "请换一种表述：使用更具体的指标、更小的地理范围，或指定其他数据源。",
+    },
+    "clarify_no_reliable_message": {
+        "en": "I stopped before fetching because the available matches were not reliable enough.",
+        "zh": "现有匹配结果不够可靠，因此我在获取数据前停止了。",
+    },
+    # Mixed indicator families.
+    "clarify_multi_family_header": {
+        "en": (
+            "Your query mixes multiple indicator families, which can lead to "
+            "partial or incorrect results in one fetch."
+        ),
+        "zh": "您的查询混合了多个指标类别，一次获取可能导致结果不完整或不正确。",
+    },
+    "clarify_multi_family_detected": {
+        "en": "I detected: {families}.",
+        "zh": "检测到的类别：{families}。",
+    },
+    "clarify_multi_family_choose": {
+        "en": "Please choose the first indicator focus to fetch accurately:",
+        "zh": "请选择要优先准确获取的指标：",
+    },
+    "clarify_multi_family_reply_hint": {
+        "en": "Reply with the option number (for example, 1) or the exact indicator you want first.",
+        "zh": "请回复选项编号（例如 1），或输入您想优先获取的具体指标。",
+    },
+    "clarify_multi_family_no_options_hint": {
+        "en": (
+            "Reply with the exact indicator focus first (for example: unemployment "
+            "rate, CPI inflation, or government debt-to-GDP)."
+        ),
+        "zh": "请先回复您要查询的具体指标（例如：失业率、CPI 通胀或政府债务占 GDP 比重）。",
+    },
+    # Group (region) scope. Labels here are system text, not provider titles;
+    # the executed option VALUES are rewritten queries and are never localized.
+    "clarify_group_scope_ambiguous": {
+        "en": "Your query mentions {region}, but the scope is still ambiguous.",
+        "zh": "您的查询提到了 {region}，但范围仍不明确。",
+    },
+    "clarify_group_scope_question": {
+        "en": (
+            "Do you want to compare {region} member countries, or ask for one "
+            "overall value for the group?"
+        ),
+        "zh": "您是想比较 {region} 的各成员国，还是查询该区域整体的单一数值？",
+    },
+    "clarify_group_scope_option_compare": {
+        "en": "compare member countries",
+        "zh": "比较各成员国",
+    },
+    "clarify_group_scope_option_group_value": {
+        "en": "one overall group value (aggregate/average if available)",
+        "zh": "区域整体的单一数值（如有，则为汇总值/平均值）",
+    },
+    "clarify_group_scope_reply_hint": {
+        "en": "Reply with the option number, or type a different scope.",
+        "zh": "请回复选项编号，或输入其他范围。",
+    },
+    # Decomposition without named members. {category_label}/{category_plural}
+    # are themselves rendered from the clarify_decomp_noun_* ids.
+    "clarify_decomp_noun_category": {"en": "category", "zh": "类别"},
+    "clarify_decomp_noun_categories": {"en": "categories", "zh": "类别"},
+    "clarify_decomp_noun_member": {"en": "breakdown member", "zh": "细分项"},
+    "clarify_decomp_noun_members": {"en": "breakdown members", "zh": "细分项"},
+    "clarify_decomp_missing": {
+        "en": (
+            "Your query asks for a {category_label} breakdown, but no specific "
+            "{category_plural} were named."
+        ),
+        "zh": "您的查询要求按{category_label}细分，但未指明具体的{category_plural}。",
+    },
+    "clarify_decomp_question": {
+        "en": "Which {category_plural} should I use?",
+        "zh": "应使用哪些{category_plural}？",
+    },
+    "clarify_decomp_option_specify": {
+        "en": "specify {category_plural}",
+        "zh": "指定{category_plural}",
+    },
+    "clarify_decomp_option_overall": {
+        "en": "use the main overall series",
+        "zh": "使用总体主序列",
+    },
+    "clarify_decomp_reply_hint": {
+        "en": "Reply with the option number, or type the specific {category_plural} you want.",
+        "zh": "请回复选项编号，或输入您想要的具体{category_plural}。",
+    },
+    # Geographic breakdown without a named geography.
+    "clarify_geo_breakdown_missing": {
+        "en": (
+            "Your query asks for a geographic breakdown, but it does not name the "
+            "geography to break down."
+        ),
+        "zh": "您的查询要求按地理区域细分，但未指明要细分的国家或地区。",
+    },
+    "clarify_geo_breakdown_subnational": {
+        "en": (
+            "If you want a subnational breakdown, name the country first "
+            "(for example: 'Canada employment by province')."
+        ),
+        "zh": "如需国家以下级别的细分，请先指明国家（例如：“加拿大各省就业”）。",
+    },
+    "clarify_geo_breakdown_group": {
+        "en": (
+            "If you want a multi-country group, name the region explicitly "
+            "(for example: 'employment in South Asia')."
+        ),
+        "zh": "如需多国区域数据，请明确指明区域（例如：“南亚就业”）。",
+    },
+    # "Current match" labels. clarify_current_unresolved is shown when no
+    # concrete series has been resolved yet; the zh copy says so plainly
+    # instead of surfacing internal routing jargon.
+    "clarify_current_unresolved": {
+        "en": "{provider} routing guess",
+        "zh": "尚未确定（已初步路由至 {provider}）",
+    },
+    "clarify_current_from": {
+        "en": "{name} from {provider}",
+        "zh": "{name}（来源：{provider}）",
+    },
+    "clarify_unknown_provider": {"en": "Unknown provider", "zh": "未知数据源"},
+    "clarify_unknown_source": {"en": "unknown source", "zh": "未知来源"},
+    "clarify_unknown_indicator": {"en": "Unknown indicator", "zh": "未知指标"},
+    "clarify_current_routed_match": {
+        "en": "Current routed match: {label}",
+        "zh": "当前路由匹配：{label}",
+    },
+    "clarify_current_match": {
+        "en": "Current match: {label}",
+        "zh": "当前匹配：{label}",
+    },
+    # Indicator-choice menus (prefetch / post-fetch uncertainty / no-data).
+    "clarify_prefetch_header": {
+        "en": "I found multiple plausible indicator matches before fetching data.",
+        "zh": "获取数据前，我找到了多个可能匹配的指标。",
+    },
+    "clarify_uncertain_header": {
+        "en": "I found multiple plausible indicators and the current match is uncertain.",
+        "zh": "我找到了多个可能的指标，当前匹配并不确定。",
+    },
+    "clarify_no_data_header": {
+        "en": "I couldn't find data with the current indicator selection.",
+        "zh": "按当前选择的指标未找到数据。",
+    },
+    "clarify_severe_mismatch_header": {
+        "en": "The current indicator match may be wrong for your request.",
+        "zh": "当前匹配的指标可能不符合您的请求。",
+    },
+    "clarify_severe_mismatch_reply": {
+        "en": (
+            "Please reply with the exact indicator name or code you want "
+            "(for example, NE.IMP.GNFS.ZS)."
+        ),
+        "zh": "请回复您想要的具体指标名称或代码（例如 NE.IMP.GNFS.ZS）。",
+    },
+    "clarify_choose_intended": {
+        "en": "Please choose the indicator you intended:",
+        "zh": "请选择您想要的指标：",
+    },
+    "clarify_choose_one": {
+        "en": "Please choose one option:",
+        "zh": "请选择一个选项：",
+    },
+    "clarify_reply_hint": {
+        "en": "Reply with the option number (for example, 1) or the exact indicator text you want.",
+        "zh": "请回复选项编号（例如 1），或输入您想要的具体指标名称。",
+    },
+    # Low-confidence parse. {reason} is the parse LLM's own explanation.
+    "clarify_low_confidence_reason_default": {
+        "en": "I could not confidently determine the requested data.",
+        "zh": "我无法确定您所请求的数据。",
+    },
+    "clarify_low_confidence_uncertain": {
+        "en": "I'm not certain about this query: {reason}",
+        "zh": "我不确定如何理解此查询：{reason}",
+    },
+    "clarify_low_confidence_rephrase": {
+        "en": "Could you rephrase with more specific details?",
+        "zh": "能否换一种更具体的表述？",
+    },
+    "clarify_low_confidence_promode": {
+        "en": "Or would you like to use Pro Mode for a custom analysis?",
+        "zh": "或者，您想使用 Pro Mode 进行自定义分析吗？",
+    },
+    "clarify_low_confidence_message": {
+        "en": (
+            "**Uncertain Query**\n{reason}\n\n"
+            "Please provide more details or use Pro Mode for better results."
+        ),
+        "zh": "**查询不明确**\n{reason}\n\n请提供更多细节，或使用 Pro Mode 以获得更好的结果。",
     },
 }
 

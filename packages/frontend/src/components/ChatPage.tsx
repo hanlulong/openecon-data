@@ -66,7 +66,10 @@ function sanitizeClarificationContent(content: string, clarificationOptions?: Cl
       if (!line) {
         return false
       }
-      if (/^reply with the option number/i.test(line)) {
+      // The backend's localized reply hints (backend/services/user_messages.py
+      // clarify_* ids) all start with one fixed prefix per language; the
+      // option buttons replace them, so strip exactly those prefixes.
+      if (/^(?:reply with the option number|请回复选项编号)/i.test(line)) {
         return false
       }
       const numberedOptionMatch = line.match(/^(\d+)\.\s+/)

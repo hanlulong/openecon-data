@@ -322,6 +322,40 @@ describe('ChatPage', () => {
       });
     });
 
+    it('strips the localized (zh) reply hint when clarification buttons are shown', async () => {
+      const user = userEvent.setup();
+      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, callbacks) => {
+        callbacks.onData?.({
+          conversationId: 'conv-clarification-zh',
+          clarificationNeeded: true,
+          clarificationQuestions: [
+            '获取数据前，我找到了多个可能匹配的指标。',
+            '请选择您想要的指标：',
+            '1. [CHINAMACRO] China CPI YoY (CN_CPI_YOY)',
+            '2. [WORLDBANK] Consumer price index (CPTOTSAXN)',
+            '请回复选项编号（例如 1），或输入您想要的具体指标名称。',
+          ],
+          clarificationOptions: [
+            { id: '1', label: 'China CPI YoY', value: 'CHINAMACRO:CN_CPI_YOY' },
+            { id: '2', label: 'Consumer price index', value: 'WORLDBANK:CPTOTSAXN' },
+          ],
+        });
+        callbacks.onDone?.('conv-clarification-zh');
+      });
+
+      renderChatPage();
+
+      const input = await screen.findByPlaceholderText(/Ask about economic data/i);
+      await user.type(input, '中国CPI');
+      fireEvent.submit(input.closest('form')!);
+
+      await waitFor(() => {
+        expect(screen.getByText(/获取数据前，我找到了多个可能匹配的指标/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /China CPI YoY/i })).toBeInTheDocument();
+        expect(screen.queryByText(/请回复选项编号/)).not.toBeInTheDocument();
+      });
+    });
+
     it('shows assistant warning text even when chart data is returned', async () => {
       const user = userEvent.setup();
       mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, callbacks) => {
