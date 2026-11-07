@@ -26,7 +26,10 @@ import json
 import logging
 import re
 import sqlite3
+import string
 import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +49,35 @@ DB_PATH = Path(__file__).parent.parent / "data" / "indicators.db"
 # the SOURCE's lifecycle semantics ("archive"/"discontinued"), plus the World
 # Bank's own discontinued "Doing Business" database.
 _WB_ARCHIVAL_SOURCE_MARKERS = ("archive", "discontinued", "doing business")
+
+# SQLite's built-in lower() and the NOCASE collation fold the 26 ASCII letters
+# only.  Python twins must use the same fold (str.lower()/casefold() also fold
+# non-ASCII letters) so values bound against SQL expressions such as
+# lower(trim(name)) compare exactly as SQLite computes them.
+_SQLITE_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+# Read-side catalog caches (stored provider spellings, irregular-title index,
+# exact-title memo) are rebuilt after this many seconds so out-of-process
+# catalog refreshes (scripts/fetch_all_indicators.py) are picked up without a
+# restart; in-process writes invalidate them immediately via
+# IndicatorDatabase.catalog_generation.
+_CATALOG_CACHE_TTL_SECONDS = 300.0
+_LOOKUP_MEMO_MAX_ENTRIES = 2048
+
+
+def _sqlite_lower(value: str) -> str:
+    """Return ``value`` lowered exactly like SQLite's built-in ``lower()``."""
+    return value.translate(_SQLITE_ASCII_LOWER)
+
+
+def _sqlite_prefix_upper_bound(prefix: str) -> str:
+    """Smallest string greater than every string that starts with ``prefix``.
+
+    Turns ``expr LIKE 'prefix%'`` (never index-served for an expression) into
+    the BINARY range ``expr >= prefix AND expr < bound`` that an expression
+    index can serve.  Callers pass non-empty ``[a-z0-9]`` tokens.
+    """
+    return prefix[:-1] + chr(ord(prefix[-1]) + 1)
 
 
 def _catalog_row(row: Any) -> Dict[str, Any]:
@@ -115,6 +147,9 @@ class IndicatorDatabase:
         self._initialized = False
         self._write_lock = threading.Lock()  # Thread safety for write operations
         self._conn_lock = threading.Lock()  # Guards schema init + conn registry
+        # Bumped on every committed in-process write so read-side caches in
+        # IndicatorLookup (provider spellings, exact-title memo) invalidate.
+        self.catalog_generation = 0
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create THIS THREAD's database connection.
@@ -274,6 +309,7 @@ class IndicatorDatabase:
                     indicator.last_updated, indicator.raw_metadata
                 ))
                 conn.commit()
+                self.catalog_generation += 1
                 return True
             except Exception as e:
                 logger.error(f"Error inserting indicator {indicator.provider}:{indicator.code}: {e}")
@@ -329,6 +365,7 @@ class IndicatorDatabase:
                         ) for ind in batch
                     ])
                     conn.commit()
+                    self.catalog_generation += 1
                     inserted += len(batch)
                     logger.info(f"Inserted batch {i//batch_size + 1}: {len(batch)} indicators")
                 except Exception as e:
@@ -644,6 +681,141 @@ class IndicatorLookup:
         from ..utils.providers import db_provider_lookup
 
         self._provider_aliases = db_provider_lookup()
+        self._catalog_lock = threading.Lock()
+        self._catalog_state: Optional[Dict[str, Any]] = None
+
+    # ------------------------------------------------------------------
+    # Read-side catalog caches (structural: plumbing over stored metadata)
+    # ------------------------------------------------------------------
+
+    def _catalog_cache(self) -> Dict[str, Any]:
+        """Return the current read-cache bucket, rebuilding it when stale.
+
+        Staleness signals: the DB's in-process write generation and a TTL for
+        out-of-process catalog refreshes.  Instances built via ``__new__``
+        (some tests) lazily get their lock/state here.
+        """
+        lock = getattr(self, "_catalog_lock", None)
+        if lock is None:
+            lock = self._catalog_lock = threading.Lock()
+        generation = getattr(self.db, "catalog_generation", 0)
+        now = time.monotonic()
+        with lock:
+            state = getattr(self, "_catalog_state", None)
+            if (
+                state is None
+                or state["generation"] != generation
+                or now - state["built_at"] > _CATALOG_CACHE_TTL_SECONDS
+            ):
+                state = {
+                    "generation": generation,
+                    "built_at": now,
+                    "providers": None,
+                    "irregular_names": {},
+                    "memo": OrderedDict(),
+                }
+                self._catalog_state = state
+            return state
+
+    def _memo_get(self, key: Tuple[Any, ...]) -> Optional[List[Dict[str, Any]]]:
+        """Return a private copy of memoized lookup rows, or None on a miss."""
+        state = self._catalog_cache()
+        with self._catalog_lock:
+            cached = state["memo"].get(key)
+            if cached is None:
+                return None
+            state["memo"].move_to_end(key)
+        return [dict(row) for row in cached]
+
+    def _memo_put(self, key: Tuple[Any, ...], rows: List[Dict[str, Any]]) -> None:
+        """Memoize lookup rows (copied; callers may mutate what they return)."""
+        state = self._catalog_cache()
+        with self._catalog_lock:
+            memo = state["memo"]
+            memo[key] = [dict(row) for row in rows]
+            memo.move_to_end(key)
+            while len(memo) > _LOOKUP_MEMO_MAX_ENTRIES:
+                memo.popitem(last=False)
+
+    def _stored_provider_spellings(self, provider: str) -> Optional[Tuple[str, ...]]:
+        """Stored provider values that ``provider = ? COLLATE NOCASE`` matches.
+
+        The 2026-07-19 casing fix made provider filters case-insensitive so
+        mixed-case stored providers (WorldBank, StatsCan, CoinGecko, ...) match
+        any caller spelling.  But NOCASE cannot use the BINARY-collated
+        (provider, ...) indexes, turning every provider-scoped exact-title
+        probe into a full-table scan.  Resolving the caller spelling against
+        the handful of stored values once (SELECT DISTINCT provider) and then
+        binding them exactly keeps the same match set with index use.
+
+        Returns ``None`` when the spellings cannot be listed (callers then fall
+        back to the NOCASE predicate), ``()`` when no stored provider matches.
+        """
+        state = self._catalog_cache()
+        spellings = state.get("providers")
+        if spellings is None:
+            try:
+                conn = self.db._get_connection()  # pylint: disable=protected-access
+                rows = conn.execute("SELECT DISTINCT provider FROM indicators").fetchall()
+            except Exception:
+                logger.debug("Provider spelling lookup unavailable", exc_info=True)
+                return None
+            grouped: Dict[str, List[str]] = {}
+            for row in rows:
+                value = row[0]
+                if isinstance(value, str):
+                    grouped.setdefault(_sqlite_lower(value), []).append(value)
+            spellings = {key: tuple(sorted(values)) for key, values in grouped.items()}
+            state["providers"] = spellings
+        return spellings.get(_sqlite_lower(str(provider)), ())
+
+    def _provider_filter(self, provider: str) -> Tuple[str, List[Any]]:
+        """Index-friendly SQL twin of ``provider = ? COLLATE NOCASE``."""
+        spellings = self._stored_provider_spellings(provider)
+        if spellings is None:
+            return "provider = ? COLLATE NOCASE", [provider]
+        if not spellings:
+            # No stored provider folds to this name: NOCASE would match nothing.
+            return "0", []
+        if len(spellings) == 1:
+            return "provider = ?", [spellings[0]]
+        return f"provider IN ({','.join('?' for _ in spellings)})", list(spellings)
+
+    def _irregular_title_index(
+        self,
+        provider_sql: str,
+        provider_params: List[Any],
+    ) -> Dict[str, List[int]]:
+        """Map ``name.strip().casefold()`` -> rowids for titles SQL cannot fold.
+
+        A pure-ASCII title padded only with spaces satisfies
+        ``name.strip().casefold() == lower(trim(name))``, so the
+        (provider, lower(trim(name))) index already finds it.  Only titles with
+        non-ASCII characters (casefold differs from SQLite lower) or non-space
+        edge whitespace need Python folding; they are a few thousand rows
+        catalog-wide, so index them once per cache generation instead of
+        scanning the whole provider catalog on every non-ASCII probe.
+        """
+        state = self._catalog_cache()
+        cache_key = (provider_sql, tuple(provider_params))
+        cached = state["irregular_names"].get(cache_key)
+        if cached is not None:
+            return cached
+        conn = self.db._get_connection()  # pylint: disable=protected-access
+        rows = conn.execute(
+            f"SELECT rowid, name FROM indicators WHERE {provider_sql}",
+            provider_params,
+        ).fetchall()
+        index: Dict[str, List[int]] = {}
+        for row in rows:
+            rowid, name = row[0], row[1]
+            if not isinstance(name, str):
+                continue
+            if name.isascii() and name.strip() == name.strip(" "):
+                continue
+            index.setdefault(name.strip().casefold(), []).append(rowid)
+        state["irregular_names"][cache_key] = index
+        return index
 
     def _normalize_provider(self, provider: Optional[str]) -> Optional[str]:
         """Normalize provider aliases to canonical database provider names."""
@@ -681,6 +853,16 @@ class IndicatorLookup:
 
         provider = self._normalize_provider(provider)
 
+        # Each FTS call costs ~0.1-0.4s (prefix-term expansion + bm25 over the
+        # whole match set); the exact-title shortcut alone issues one per
+        # search variant per provider on every request.  Results are a pure
+        # function of (query, provider, category, limit) and the catalog
+        # snapshot, so memoize them per catalog generation.
+        memo_key = ("search", query, provider, category, limit)
+        cached = self._memo_get(memo_key)
+        if cached is not None:
+            return cached
+
         # Over-fetch from DB to ensure quality scoring sees good candidates.
         # BM25 favours term repetition; _rank_results applies quality signals
         # (popularity, name density, aggregate boost) that need a broad pool.
@@ -688,9 +870,9 @@ class IndicatorLookup:
         results = self.db.search(query, provider, category, db_limit)
 
         # Post-process and rank results
-        ranked = self._rank_results(results, query)
-
-        return ranked[:limit]
+        ranked = self._rank_results(results, query)[:limit]
+        self._memo_put(memo_key, ranked)
+        return ranked
 
     def exact_name_matches(
         self,
@@ -705,6 +887,42 @@ class IndicatorLookup:
         short exact titles such as "M1 for Republic of Korea" after query
         normalization injects extra terms ("money supply", "monetary").  Exact
         title matching must stay literal, provider-scoped, and side-effect free.
+
+        Results are memoized per catalog generation (bounded LRU, see
+        :meth:`_memo_get`): the exact-title shortcut probes every provider on
+        every request, and the answer is a pure function of the inputs and
+        the catalog snapshot.
+        """
+        raw_inputs = tuple(
+            str(name or "").strip()
+            for name in names
+            if str(name or "").strip()
+        )
+        if not raw_inputs:
+            return []
+        memo_key = ("exact_name", raw_inputs, self._normalize_provider(provider), limit)
+        cached = self._memo_get(memo_key)
+        if cached is not None:
+            return cached
+        rows = self._exact_name_matches_uncached(list(raw_inputs), provider, limit)
+        self._memo_put(memo_key, rows)
+        return rows
+
+    def _exact_name_matches_uncached(
+        self,
+        names: List[str],
+        provider: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Uncached body of :meth:`exact_name_matches`.
+
+        Every provider-scoped statement here is shaped to be served by the
+        (provider, lower(trim(name))) index: the provider predicate is bound
+        to the stored spelling (see :meth:`_provider_filter`), equality probes
+        compare ``lower(trim(name))``, and title prefixes are BINARY ranges on
+        that expression.  The literal-case / LIKE semantics the original
+        statements had are re-applied in Python on the few returned rows, so
+        the match sets are unchanged.
         """
         def _normalize_exact_title(value: str) -> str:
             return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
@@ -732,6 +950,9 @@ class IndicatorLookup:
         normalized_provider = self._normalize_provider(provider)
         conn = self.db._get_connection()  # pylint: disable=protected-access
         cursor = conn.cursor()
+        provider_sql, provider_params = (
+            self._provider_filter(normalized_provider) if normalized_provider else ("", [])
+        )
 
         def _row_identity(row: Dict[str, Any]) -> tuple[str, str]:
             return (
@@ -742,16 +963,34 @@ class IndicatorLookup:
         raw_exact_rows: list[tuple[int, int, str, Dict[str, Any]]] = []
         raw_seen: set[tuple[str, str]] = set()
 
-        raw_placeholders = ",".join("?" for _ in raw_deduped)
-        raw_sql = f"SELECT * FROM indicators WHERE trim(name) IN ({raw_placeholders})"
-        raw_params: list[Any] = list(raw_deduped)
         if normalized_provider:
-            raw_sql += " AND provider = ? COLLATE NOCASE"
-            raw_params.append(normalized_provider)
-        raw_sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
-        raw_params.append(max(1, limit))
-        cursor.execute(raw_sql, raw_params)
-        for row in cursor.fetchall():
+            # Literal pass: trim(name) == raw (case-sensitive).  Probe the
+            # (provider, lower(trim(name))) index with the SQLite-lowered raw
+            # spellings, then keep only rows whose SQLite-trimmed title equals
+            # a raw spelling exactly; LIMIT applies after that filter, exactly
+            # as it did on the original `trim(name) IN (...) LIMIT ?` scan.
+            raw_set = set(raw_deduped)
+            raw_lowered = list(dict.fromkeys(_sqlite_lower(name) for name in raw_deduped))
+            cursor.execute(
+                f"SELECT * FROM indicators WHERE {provider_sql} "
+                f"AND lower(trim(name)) IN ({','.join('?' for _ in raw_lowered)}) "
+                "ORDER BY COALESCE(popularity, 0) DESC, code",
+                [*provider_params, *raw_lowered],
+            )
+            raw_rows = [
+                row
+                for row in cursor.fetchall()
+                if isinstance(row["name"], str) and row["name"].strip(" ") in raw_set
+            ][: max(1, limit)]
+        else:
+            raw_placeholders = ",".join("?" for _ in raw_deduped)
+            cursor.execute(
+                f"SELECT * FROM indicators WHERE trim(name) IN ({raw_placeholders}) "
+                "ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?",
+                [*raw_deduped, max(1, limit)],
+            )
+            raw_rows = cursor.fetchall()
+        for row in raw_rows:
             candidate = _catalog_row(row)
             identity = _row_identity(candidate)
             if identity in raw_seen:
@@ -777,12 +1016,35 @@ class IndicatorLookup:
             for raw_name in raw_deduped
         )
         if normalized_provider and len(raw_exact_rows) < limit and needs_unicode_casefold_scan:
-            cursor.execute(
-                "SELECT * FROM indicators WHERE provider = ? COLLATE NOCASE "
-                "ORDER BY COALESCE(popularity, 0) DESC, code",
-                (normalized_provider,),
-            )
-            for row in cursor.fetchall():
+            # Rows with name.strip().casefold() equal to a raw casefold.  A
+            # regular (pure-ASCII, space-padded) title folds identically under
+            # SQLite lower(trim(name)), so the index finds those for ASCII
+            # targets; irregular titles come from the cached fold index.  The
+            # casefold check below stays the sole match authority.
+            casefold_targets = list(raw_casefold_order)
+            ascii_targets = [target for target in casefold_targets if target.isascii()]
+            casefold_rows: list[Any] = []
+            if ascii_targets:
+                cursor.execute(
+                    f"SELECT * FROM indicators WHERE {provider_sql} "
+                    f"AND lower(trim(name)) IN ({','.join('?' for _ in ascii_targets)})",
+                    [*provider_params, *ascii_targets],
+                )
+                casefold_rows.extend(cursor.fetchall())
+            irregular_index = self._irregular_title_index(provider_sql, provider_params)
+            irregular_rowids = sorted({
+                rowid
+                for target in casefold_targets
+                for rowid in irregular_index.get(target, ())
+            })
+            for start in range(0, len(irregular_rowids), 500):
+                chunk = irregular_rowids[start:start + 500]
+                cursor.execute(
+                    f"SELECT * FROM indicators WHERE rowid IN ({','.join('?' for _ in chunk)})",
+                    chunk,
+                )
+                casefold_rows.extend(cursor.fetchall())
+            for row in casefold_rows:
                 candidate = _catalog_row(row)
                 identity = _row_identity(candidate)
                 if identity in raw_seen:
@@ -804,8 +1066,8 @@ class IndicatorLookup:
         sql = f"SELECT * FROM indicators WHERE lower(trim(name)) IN ({placeholders})"
         params: list[Any] = list(deduped)
         if normalized_provider:
-            sql += " AND provider = ? COLLATE NOCASE"
-            params.append(normalized_provider)
+            sql += f" AND {provider_sql}"
+            params.extend(provider_params)
         sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
         params.append(max(1, limit))
 
@@ -827,11 +1089,21 @@ class IndicatorLookup:
         fallback_params: list[Any] = []
         conditions: list[str] = []
         if normalized_provider:
-            conditions.append("provider = ? COLLATE NOCASE")
-            fallback_params.append(normalized_provider)
-        token_clauses = ["lower(name) LIKE ?" for _ in first_tokens]
+            # `lower(name) LIKE 'tok%'` cannot use an index; the BINARY range
+            # on the indexed lower(trim(name)) expression is a superset (it
+            # also admits space-padded titles), so re-apply the LIKE predicate
+            # in Python below to keep the candidate set identical.
+            conditions.append(provider_sql)
+            fallback_params.extend(provider_params)
+            token_clauses = [
+                "(lower(trim(name)) >= ? AND lower(trim(name)) < ?)" for _ in first_tokens
+            ]
+            for token in first_tokens:
+                fallback_params.extend((token, _sqlite_prefix_upper_bound(token)))
+        else:
+            token_clauses = ["lower(name) LIKE ?" for _ in first_tokens]
+            fallback_params.extend(f"{token}%" for token in first_tokens)
         conditions.append("(" + " OR ".join(token_clauses) + ")")
-        fallback_params.extend(f"{token}%" for token in first_tokens)
         fallback_sql += " AND ".join(conditions)
         fallback_sql += " ORDER BY COALESCE(popularity, 0) DESC, code"
 
@@ -842,9 +1114,17 @@ class IndicatorLookup:
             fallback_sql += " LIMIT 5000"
 
         cursor.execute(fallback_sql, fallback_params)
+        fallback_rows = cursor.fetchall()
+        if normalized_provider:
+            fallback_rows = [
+                row
+                for row in fallback_rows
+                if isinstance(row["name"], str)
+                and _sqlite_lower(row["name"]).startswith(tuple(first_tokens))
+            ]
         seen_codes = {str(row.get("code") or "") for row in exact_rows}
         normalized_rows: list[tuple[int, int, str, Dict[str, Any]]] = []
-        for row in cursor.fetchall():
+        for row in fallback_rows:
             candidate = _catalog_row(row)
             code = str(candidate.get("code") or "")
             if code in seen_codes:
@@ -876,8 +1156,8 @@ class IndicatorLookup:
                 # through the literal/prefix exact-title paths or clarify.
                 if len(query_tokens) < 5:
                     continue
-                token_sql = "SELECT * FROM indicators WHERE provider = ? COLLATE NOCASE"
-                token_params: list[Any] = [normalized_provider]
+                token_sql = f"SELECT * FROM indicators WHERE {provider_sql}"
+                token_params: list[Any] = list(provider_params)
                 for token in query_tokens:
                     token_sql += " AND lower(name) LIKE ?"
                     token_params.append(f"%{token}%")
