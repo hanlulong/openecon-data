@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { FredNotice } from '@/components/FredNotice'
 
 const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
@@ -206,6 +207,7 @@ export function ExamplesPage() {
               <a href="mailto:contact@openecon.ai" className="hover:text-white">Contact</a>
             </nav>
           </div>
+          <FredNotice className="mt-4 text-center text-xs text-gray-500" linkClassName="underline hover:text-white" />
         </div>
       </footer>
     </div>
