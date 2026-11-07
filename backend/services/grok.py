@@ -19,6 +19,26 @@ import re
 
 from backend.config import get_settings
 
+
+def _sandbox_import_rules() -> str:
+    """The sandbox's blocked imports/operations, rendered from the validator
+    itself so the generation and repair prompts can never drift from what
+    SecurityValidator actually rejects (a stale list costs a repair round)."""
+    # Lazy import: grok is imported by modules that never execute code.
+    from backend.services.secure_code_executor import SecurityValidator
+
+    blocked = sorted(
+        set(SecurityValidator.FORBIDDEN_MODULES) | set(SecurityValidator.RESTRICTED_MODULES)
+    )
+    link_attrs = ", ".join(f".{a}" for a in sorted(SecurityValidator.LINK_AND_MODE_ATTRS))
+    return (
+        f"Blocked imports (rejected before execution): {', '.join(blocked)}.\n"
+        "asyncio is blocked: fetch with synchronous httpx (httpx.get / httpx.post / "
+        "httpx.Client), never httpx.AsyncClient.\n"
+        f"Also rejected on ANY object: {link_attrs}; and `from os import *` / "
+        "`from sys import *`."
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -178,6 +198,7 @@ class GrokService:
         if attempt > self.max_retries:
             raise Exception(f"Max retries ({self.max_retries}) exceeded. Last error: {error_message}")
 
+        sandbox_rules = _sandbox_import_rules()
         fix_prompt = f"""The following Python code produced an error. Fix it.
 
 ORIGINAL CODE:
@@ -200,7 +221,7 @@ SANDBOX RULES:
 - os, sys, json, re, hashlib are ALREADY available (pre-loaded by sandbox wrapper) - do NOT import them
 - If the error is "Forbidden import: os" - REMOVE the `import os` line, os is already available
 - If the error is "Forbidden import: sys" - REMOVE the `import sys` line, sys is already available
-- Forbidden modules: subprocess, socket, shutil, importlib, ctypes, threading, multiprocessing, pickle
+{sandbox_rules}
 
 COMMON FIXES:
 - "Forbidden import: os" -> Remove `import os` line (os is pre-loaded)
@@ -461,13 +482,14 @@ Output ONLY the Python code, no explanations."""
     def _build_system_prompt(self, available_data: Optional[Dict[str, Any]] = None, session_id: Optional[str] = None) -> str:
         """Build system prompt for code generation"""
         file_prefix = session_id if session_id else "output"
+        sandbox_rules = _sandbox_import_rules()
 
         prompt = f"""Expert Python programmer for economic data analysis and visualization.
 
 Generate code that:
 - Performs data analysis/calculations/visualizations as requested
 - Uses: pandas, numpy, matplotlib, httpx, json, datetime, statistics
-- For HTTP requests, use httpx (async: httpx.AsyncClient(), sync: httpx.get/post)
+- For HTTP requests, use synchronous httpx (httpx.get/post or httpx.Client); asyncio is blocked by the sandbox
 - Clear comments, error handling, descriptive variables
 - Builds upon conversation context
 - REUSES existing session data (DO NOT refetch if data exists!)
@@ -557,10 +579,8 @@ CRITICAL RULES:
 - ⚠️ If coordinate fails or metadata unavailable, fall back to Vector API for aggregates
 
 ⚠️ **SANDBOX SECURITY - FORBIDDEN IMPORTS** ⚠️
-The following modules are BLOCKED by the security sandbox and will cause errors:
-- os, sys, subprocess, socket, shutil, importlib, ctypes
-- threading, multiprocessing, pickle, shelve, inspect
-- urllib, requests (use httpx instead), http, ftplib, ssl
+The security sandbox rejects the following (use httpx instead of requests/urllib):
+{sandbox_rules}
 
 The following modules are ALREADY AVAILABLE in the sandbox (do NOT re-import them):
 - os, sys, json, re, hashlib, io, contextlib
@@ -576,9 +596,8 @@ OTHER APIs:
 DERIVED METRICS: Fetch raw data, calculate in Python, use hardcoded constants for stable reference data
 
 ⚠️ **SANDBOX SECURITY - IMPORT RULES** ⚠️
-The execution sandbox BLOCKS these imports (will cause "Forbidden import" error):
-  os, sys, subprocess, socket, shutil, importlib, ctypes, threading, multiprocessing,
-  pickle, shelve, dill, inspect, types, gc, pdb, webbrowser, urllib, requests, http, ftplib, ssl
+The execution sandbox rejects every blocked import/operation listed above
+(each causes a "Forbidden ..." error before the code runs).
 
 The sandbox wrapper ALREADY provides: os, sys, json, re, hashlib, io, contextlib
 - Do NOT write `import os` or `import sys` — they are already available
