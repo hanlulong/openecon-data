@@ -2,9 +2,11 @@
 
 import io
 import time
+from datetime import datetime
 
 import httpx
 import pandas as pd
+import pytest
 
 from backend.models import Metadata, NormalizedData
 from backend.services.export import ExportService
@@ -117,3 +119,44 @@ def test_non_colliding_names_are_unchanged():
     ]
     dta_columns = list(_read_dta(svc.generate_dta(data)).columns)
     assert dta_columns == ["date", "NY_GDP_MKTP_CD_US_GDP", "NY_GDP_MKTP_CD_CA_GDP", LONG_ID[:32]]
+
+
+def _dta_dates(labels, multi=True):
+    data = [_series("A", "US", labels)]
+    if multi:
+        data.append(_series("B", "US", labels))
+    return _read_dta(svc.generate_dta(data))["date"].tolist()
+
+
+@pytest.mark.parametrize("multi", [False, True])
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        (["2020M01", "2020M02"], [datetime(2020, 1, 1), datetime(2020, 2, 1)]),
+        (["2020-Q1", "2020Q4"], [datetime(2020, 1, 1), datetime(2020, 10, 1)]),
+        (["2019", "2020"], [datetime(2019, 1, 1), datetime(2020, 1, 1)]),
+        (["2020-01", "2020-02"], [datetime(2020, 1, 1), datetime(2020, 2, 1)]),
+        (["2024/01/02"], [datetime(2024, 1, 2)]),
+        # CoinGecko history timestamps are tz-aware; the old path raised
+        # NotImplementedError (Stata has no time zones). Stored as UTC.
+        (["2026-11-07T13:25:00.123000+00:00", "2026-11-07T09:00:00-05:00"],
+         [datetime(2026, 11, 7, 13, 25, 0, 123000), datetime(2026, 11, 7, 14, 0)]),
+    ],
+)
+def test_uniform_date_labels_become_stata_dates(labels, expected, multi):
+    assert sorted(_dta_dates(labels, multi)) == sorted(pd.Timestamp(d) for d in expected)
+
+
+@pytest.mark.parametrize("multi", [False, True])
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["2020", "2020-06"],          # mixed granularity: "2020-06" used to become NaT
+        ["EUR", "GBP"],               # ExchangeRate's categorical "dates"
+        ["2020-13", "2021-01"],       # not a real month
+    ],
+)
+def test_other_date_labels_stay_strings(labels, multi):
+    dates = _dta_dates(labels, multi)
+    assert sorted(dates) == sorted(labels)
+    assert not any(pd.isna(d) for d in dates)

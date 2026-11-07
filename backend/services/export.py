@@ -3,12 +3,87 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
-from typing import List, Optional
+import re
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
 from ..models import NormalizedData
+
+# Date-label shapes the providers emit, each with its granularity. Labels are
+# converted to datetimes for Stata only when every non-empty label matches one
+# of these and all share one granularity; otherwise the original strings are
+# kept, so a valid label never becomes a missing value.
+_QUARTER_START_MONTH = {"1": 1, "2": 4, "3": 7, "4": 10}
+_DATE_LABEL_SHAPES: Tuple[Tuple["re.Pattern[str]", str], ...] = (
+    (re.compile(r"(\d{4})"), "year"),                                    # 2020
+    (re.compile(r"(\d{4})-?Q([1-4])", re.IGNORECASE), "quarter"),        # 2020-Q1, 2020Q1
+    (re.compile(r"(\d{4})-?M(\d{1,2})", re.IGNORECASE), "month"),       # 2020M01, 2020-M01
+    (re.compile(r"(\d{4})-(\d{2})"), "month"),                          # 2020-01
+    (re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})"), "day"),             # 2020-01-31, 2020/01/31
+    (
+        re.compile(
+            r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?"
+            r"(Z|[+-]\d{2}:?\d{2})?",
+            re.IGNORECASE,
+        ),
+        "datetime",                                                     # ISO timestamps
+    ),
+)
+
+
+def _parse_date_label(label: str) -> Optional[Tuple[datetime, str]]:
+    """Parse one provider date label to (naive UTC datetime, granularity)."""
+    text = label.strip()
+    for pattern, granularity in _DATE_LABEL_SHAPES:
+        match = pattern.fullmatch(text)
+        if not match:
+            continue
+        try:
+            if granularity == "year":
+                return datetime(int(match.group(1)), 1, 1), granularity
+            if granularity == "quarter":
+                return datetime(int(match.group(1)), _QUARTER_START_MONTH[match.group(2)], 1), granularity
+            if granularity == "month":
+                return datetime(int(match.group(1)), int(match.group(2)), 1), granularity
+            if granularity == "day":
+                return datetime(*(int(match.group(i)) for i in (1, 2, 3))), granularity
+            year, month, day, hour, minute = (int(match.group(i)) for i in range(1, 6))
+            fraction = (match.group(7) or ".")[1:]
+            parsed = datetime(
+                year, month, day, hour, minute, int(match.group(6) or 0),
+                int((fraction + "000000")[:6]),
+            )
+            offset = match.group(8)
+            if offset and offset.upper() != "Z":
+                # Stata has no time zones: store the UTC wall time.
+                digits = offset[1:].replace(":", "")
+                delta = timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+                parsed = parsed - delta if offset[0] == "+" else parsed + delta
+            return parsed, granularity
+        except ValueError:
+            return None
+    return None
+
+
+def _stata_date_column(labels: List[object]):
+    """Datetimes for the .dta date column, or None to keep the strings."""
+    parsed = []
+    granularities = set()
+    for label in labels:
+        text = "" if label is None else str(label)
+        if not text.strip():
+            parsed.append(None)
+            continue
+        result = _parse_date_label(text)
+        if result is None:
+            return None
+        parsed.append(result[0])
+        granularities.add(result[1])
+    if len(granularities) != 1:
+        return None
+    return parsed
 
 
 class ExportService:
@@ -139,9 +214,15 @@ class ExportService:
 
             df = pd.DataFrame(rows)
 
-        # Convert date column to datetime for better Stata compatibility
+        # Convert the date column to datetimes for Stata only when every label
+        # parses and all share one granularity (see _stata_date_column);
+        # otherwise keep the provider's strings rather than writing missing
+        # values. The old pd.to_datetime(errors="coerce") turned "2020M01" and
+        # the "2020-06" in a mixed annual/monthly export into NaT.
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            converted = _stata_date_column(df["date"].tolist())
+            if converted is not None:
+                df["date"] = pd.to_datetime(pd.Series(converted, dtype="object"))
 
         # Write to bytes buffer
         buffer = io.BytesIO()
