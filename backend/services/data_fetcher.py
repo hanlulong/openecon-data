@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import calendar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import logging
 import math
 import re
@@ -38,6 +39,11 @@ from ..services.provider_strategy import (
     region_qualified_indicator_text,
 )
 from ..services.user_messages import get_message as _localized_message
+from ..services.time_scope_provenance import stamped_user_time_scope as _stamped_user_time_scope
+from ..services.follow_up_retrieval import (
+    is_follow_up_intent as _is_follow_up_intent,
+    structured_indicator_label as _structured_indicator_label,
+)
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_progress_labels
 from ..utils.retry import retry_async, DataNotAvailableError
@@ -453,11 +459,9 @@ def _user_set_time_scope(params: dict, original_query: str) -> bool:
     even though the dates in params were user-set turns ago. Falls back to
     the text heuristic when no stamp is present (legacy intents, caches).
     """
-    authority = str((params or {}).get("__time_scope_authority") or "")
-    if authority == "user":
-        return True
-    if authority == "default":
-        return False
+    stamped = _stamped_user_time_scope(params)
+    if stamped is not None:
+        return stamped
     return _query_has_explicit_time_scope(original_query or "")
 
 
@@ -990,9 +994,10 @@ def _is_conversation_follow_up(params: dict[str, Any], intent: Optional[ParsedIn
     sites: materialize_intent sets it for every delta turn (turn_number > 0)
     and the parser sets it for LLM-detected follow-ups.  fetch_data strips
     ``__delta_resolved`` as an internal key before its FRED prep runs, so that
-    key only counts for callers that prepare params before the strip.
+    key only counts for callers that prepare params before the strip.  Same
+    predicate as follow_up_retrieval.is_follow_up_intent (one definition).
     """
-    return bool((intent is not None and intent.isFollowUp) or params.get("__delta_resolved"))
+    return _is_follow_up_intent(intent, params)
 
 
 def _follow_up_concept_text(params: dict[str, Any], intent: Optional[ParsedIntent]) -> str:
@@ -1000,28 +1005,27 @@ def _follow_up_concept_text(params: dict[str, Any], intent: Optional[ParsedInten
 
     On a follow-up the raw utterance is a DELTA ("compare with Canada",
     "那日本呢", "add the UK") that carries geography, not the concept.  The
-    concept is the provider-neutral semantic label materialized from verified
-    conversation state (or the parsed, non-code indicator phrase); the parser's
-    standalone ``resolvedQuery`` is the last resort.
-
-    ``__display_indicator_label`` is deliberately NOT a concept source: it is
-    filled from the effective original query (the raw delta utterance when the
-    follow-up has no ``resolvedQuery``) and exists only as a display fallback.
-    A code-shaped label (state persisted from a turn where the user typed the
-    series id) is skipped too: "Canada UNRATE" is not a concept search.
+    concept comes from the SAME structured-label chain the follow-up menu /
+    clarification retrieval uses (follow_up_retrieval.structured_indicator_label):
+    the merged semantic label, a non-code parsed indicator phrase, else the
+    catalog title of a carried provider code.  ``__display_indicator_label``
+    (raw query text by construction) and any candidate equal to the raw
+    utterance never count, and an unknown bare code is not a concept
+    ("Canada UNRATE" is not a concept search).  The parser's standalone
+    ``resolvedQuery`` is the last resort, only when no structured label exists
+    and only when it is not the utterance itself.
     """
-    from ..services.indicator_resolution import _looks_like_provider_indicator_code_local
-
-    label = str(params.get("__semantic_indicator_label") or "").strip()
-    if label and not _looks_like_provider_indicator_code_local("FRED", label):
+    label = _structured_indicator_label(intent, params)
+    if label:
         return label
-
-    for candidate in (intent.indicators if intent else None) or []:
-        text = str(candidate or "").strip()
-        if text and not _looks_like_provider_indicator_code_local("FRED", text):
-            return text
     if intent is not None and intent.resolvedQuery:
-        return str(intent.resolvedQuery).strip()
+        resolved = re.sub(r"\s+", " ", str(intent.resolvedQuery)).strip()
+        raw_texts = {
+            re.sub(r"\s+", " ", str(raw or "")).strip().lower()
+            for raw in (intent.originalQuery, params.get("__original_query"))
+        }
+        if resolved and resolved.lower() not in raw_texts:
+            return resolved
     return ""
 
 
@@ -1041,14 +1045,19 @@ def _fred_country_context_query(
     raw_country: Any,
     iso2: str,
 ) -> str:
-    """Build provider-search text from query/country context, not hardcoded maps."""
+    """Build provider-search text from query/country context, not hardcoded maps.
+
+    On a follow-up the raw query text is the delta utterance ("和日本比较",
+    "compare with Japan"), which names the change, not the concept; there
+    the text is rebuilt from the carried concept (_follow_up_concept_text,
+    which shares follow_up_retrieval's structured-label chain) + the
+    requested country. First-turn behavior is unchanged.
+    """
     country_label = _country_label_for_iso2(iso2, raw_country)
     if _is_conversation_follow_up(params, intent):
-        # A follow-up's utterance is a delta, not a concept: searching FRED for
-        # "compare with Canada" retrieved arbitrary Canada series.  Compose the
-        # search from the carried concept + the requested country instead.  An
-        # empty result leaves the request undiscovered, so the fail-closed
-        # country guard and the existing fallback chain take over.
+        # Searching FRED for "compare with Canada" retrieved arbitrary Canada
+        # series.  An empty concept leaves the request undiscovered, so the
+        # fail-closed country guard and the existing fallback chain take over.
         concept = _strip_fred_provider_phrase(_follow_up_concept_text(params, intent))
         if not concept:
             return ""
@@ -1439,6 +1448,218 @@ def materialize_execution_plan(
     return plan
 
 
+# Closed structural table: provider frequency labels / SDMX codes -> period code.
+# Normalization only (no semantic decision); anything unrecognized is None and
+# callers fall back to their previous year-level behavior.
+_FREQUENCY_WORD_CODES: Dict[str, str] = {
+    "annual": "A", "annually": "A", "yearly": "A", "year": "A", "years": "A",
+    "semiannual": "S", "semiannually": "S", "biannual": "S", "semester": "S",
+    "half": "S", "halfyearly": "S",
+    "quarterly": "Q", "quarter": "Q", "quarters": "Q",
+    "monthly": "M", "month": "M", "months": "M",
+    "weekly": "W", "week": "W", "weeks": "W",
+    "daily": "D", "day": "D", "days": "D",
+}
+_FREQUENCY_LETTER_CODES: Dict[str, str] = {
+    "A": "A", "Y": "A", "S": "S", "H": "S", "Q": "Q", "M": "M", "W": "W", "D": "D", "B": "D",
+}
+# Coarseness order (finest first) — used to pick the COARSER of two signals.
+_FREQUENCY_RANK = {"D": 0, "W": 1, "M": 2, "Q": 3, "S": 4, "A": 5}
+
+
+def _frequency_code(value: Any) -> Optional[str]:
+    """Normalize a frequency label ("Monthly", "Quarterly, End of Period", "M",
+    "semi-annual", "Weekly, Ending Friday") to D/W/M/Q/S/A, or None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) == 1:
+        return _FREQUENCY_LETTER_CODES.get(text.upper())
+    lowered = text.lower().replace("semi-annual", "semiannual").replace("half-year", "halfyearly")
+    for token in re.findall(r"[a-z]+", lowered):
+        code = _FREQUENCY_WORD_CODES.get(token)
+        if code:
+            return code
+    return None
+
+
+def _spacing_frequency_code(dates: List[date]) -> Optional[str]:
+    """Frequency implied by the median spacing of observation dates (None if <2)."""
+    ordered = sorted(set(dates))
+    if len(ordered) < 2:
+        return None
+    gaps = sorted((b - a).days for a, b in zip(ordered, ordered[1:]))
+    median = gaps[len(gaps) // 2]
+    if median >= 300:
+        return "A"
+    if median >= 150:
+        return "S"
+    if median >= 80:
+        return "Q"
+    if median >= 25:
+        return "M"
+    if median >= 5:
+        return "W"
+    return "D"
+
+
+def _series_period_code(series: Any, dates: List[date]) -> Optional[str]:
+    """Observation period for a series: the COARSER of its labeled frequency
+    and its observed date spacing (a mislabeled series can only widen the
+    bucket, never wrongly drop boundary observations). None when the label is
+    unknown -> callers keep year-level comparison."""
+    metadata = getattr(series, "metadata", None)
+    labeled = _frequency_code(getattr(metadata, "frequency", None) if metadata else None)
+    if labeled is None:
+        return None
+    spaced = _spacing_frequency_code(dates)
+    if spaced is not None and _FREQUENCY_RANK[spaced] > _FREQUENCY_RANK[labeled]:
+        return spaced
+    return labeled
+
+
+def _observation_period(obs_date: date, period_code: Optional[str]) -> tuple[date, date]:
+    """Calendar bucket CONTAINING ``obs_date`` at the series frequency.
+
+    Containment (not date+length) is deliberate: providers stamp periods at
+    the start (2026-10-01) OR the end (2026-10-31) — both lie in October.
+    Weekly uses a +/-6-day span so week-start and week-ending stamps both
+    cover their week. Unknown frequency -> the whole calendar year (the
+    previous year-level convention).
+    """
+    if period_code == "D":
+        return obs_date, obs_date
+    if period_code == "W":
+        return obs_date - timedelta(days=6), obs_date + timedelta(days=6)
+    year = obs_date.year
+    if period_code == "M":
+        first_month = last_month = obs_date.month
+    elif period_code == "Q":
+        first_month = ((obs_date.month - 1) // 3) * 3 + 1
+        last_month = first_month + 2
+    elif period_code == "S":
+        first_month = 1 if obs_date.month <= 6 else 7
+        last_month = first_month + 5
+    else:
+        first_month, last_month = 1, 12
+    last_day = calendar.monthrange(year, last_month)[1]
+    return date(year, first_month, 1), date(year, last_month, last_day)
+
+
+def _window_bound(value: Any, *, is_end: bool) -> Optional[date]:
+    """Parse a window bound (ISO date, YYYY-MM, YYYY, or int year)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?(?:[Tt ].*)?", text)
+    if not match:
+        return None
+    year = int(match.group(1))
+    month = int(match.group(2)) if match.group(2) else (12 if is_end else 1)
+    if not 1 <= month <= 12:
+        return None
+    if match.group(3):
+        day = int(match.group(3))
+    else:
+        day = calendar.monthrange(year, month)[1] if is_end else 1
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _requested_window(params: dict[str, Any]) -> tuple[Optional[date], Optional[date]]:
+    start = _window_bound(params.get("startDate"), is_end=False) or _window_bound(
+        params.get("start_year"), is_end=False
+    )
+    end = _window_bound(params.get("endDate"), is_end=True) or _window_bound(
+        params.get("end_year"), is_end=True
+    )
+    return start, end
+
+
+def _observation_overlaps_window(
+    obs_date: date,
+    period_code: Optional[str],
+    start: Optional[date],
+    end: Optional[date],
+) -> bool:
+    """Keep an observation iff its calendar period overlaps [start, end].
+
+    For year-aligned windows this is identical to the old year-level rule at
+    every frequency; for sub-annual windows (Q4 2026, 2026-11, "last 3
+    months") other periods of the same year no longer count as in-window.
+    """
+    obs_start, obs_end = _observation_period(obs_date, period_code)
+    if start is not None and obs_end < start:
+        return False
+    if end is not None and obs_start > end:
+        return False
+    return True
+
+
+def _point_iso_date(raw: Any) -> Optional[date]:
+    from ..providers._sdmx.periods import period_to_iso_date
+
+    normalized = period_to_iso_date(str(raw or ""))
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[Tt ].+)?", normalized):
+        return None
+    try:
+        return datetime.fromisoformat(normalized[:10]).date()
+    except ValueError:
+        return None
+
+
+def _point_field(point: Any, key: str) -> Any:
+    return point.get(key) if isinstance(point, dict) else getattr(point, key, None)
+
+
+def _series_period_for_points(series: Any) -> Optional[str]:
+    dates = [d for d in (_point_iso_date(_point_field(p, "date")) for p in (series.data or [])) if d]
+    return _series_period_code(series, dates)
+
+
+def _disclose_frequency_mismatch(
+    result: List[NormalizedData], params: dict[str, Any], language: Optional[str],
+) -> List[NormalizedData]:
+    """Disclose when the SERVED frequency differs from the requested one.
+
+    One post-fetch reconciliation point (fresh fetches AND cache hits, every
+    substitution path: kept frequency-conflict picks, exact-code locks,
+    provider fallbacks, annual-only mirrors). Compares the structured,
+    LLM-parsed ``params['frequency']`` with each series' Metadata.frequency
+    via the closed code table; unknown on either side -> no note. Returns a
+    list where annotated series are COPIES, so cached provider objects never
+    accumulate per-request (per-language) notes. Idempotent.
+    """
+    requested = _frequency_code(params.get("frequency"))
+    if not requested or not result:
+        return result
+    disclosed: List[NormalizedData] = []
+    for series in result:
+        metadata = getattr(series, "metadata", None)
+        native = _frequency_code(getattr(metadata, "frequency", None)) if metadata is not None else None
+        if not native or native == requested:
+            disclosed.append(series)
+            continue
+        note = _localized_message(
+            "frequency_mismatch_disclosure",
+            language,
+            requested=_localized_message(f"frequency_label_{requested}", language)
+            or str(params.get("frequency")).strip(),
+            native=_localized_message(f"frequency_label_{native}", language)
+            or str(metadata.frequency).strip(),
+        )
+        existing = list(metadata.notes or [])
+        if not note or note in existing:
+            disclosed.append(series)
+            continue
+        annotated = series.model_copy(deep=True)
+        annotated.metadata.notes = existing + [note]
+        disclosed.append(annotated)
+    return disclosed
+
+
 def _enforce_user_time_window(
     params: dict[str, Any], original_query: str, result: List[NormalizedData]
 ) -> List[NormalizedData]:
@@ -1469,20 +1690,25 @@ def _enforce_user_time_window(
     end_year = _year(params.get("endDate")) or _year(params.get("end_year"))
     if start_year is None and end_year is None:
         return result
+    window_start, window_end = _requested_window(params)
 
     filtered: List[NormalizedData] = []
     dropped_total = 0
     for series in result:
         points = list(series.data or [])
+        period_code = _series_period_for_points(series)
         kept = []
         for point in points:
-            point_date = (
-                point.get("date") if isinstance(point, dict)
-                else getattr(point, "date", None)
-            )
+            point_date = _point_field(point, "date")
             year = _year(point_date)
             if year is None:
                 kept.append(point)
+                continue
+            obs_date = _point_iso_date(point_date)
+            if obs_date is not None and (window_start is not None or window_end is not None):
+                # Period-overlap semantics (shared with the window probe).
+                if _observation_overlaps_window(obs_date, period_code, window_start, window_end):
+                    kept.append(point)
                 continue
             if start_year is not None and year < start_year:
                 continue
@@ -1508,13 +1734,11 @@ def _classify_time_window_probe(
     """Copy provable in-window observations and classify known outside-only data.
 
     Unknown dates/nonfinite values cannot establish absence. Null values are
-    missing observations. Keep the existing year-level window convention.
+    missing observations. In-window = the observation's calendar period (at
+    the series frequency) overlaps the requested window — the same predicate
+    as _enforce_user_time_window; year-level when the frequency is unknown.
     """
     from ..providers._sdmx.periods import period_to_iso_date
-
-    def year(value):
-        text = str(value or "")[:4]
-        return int(text) if text.isdigit() else None
 
     def observation_date(value):
         normalized = period_to_iso_date(value)
@@ -1525,8 +1749,7 @@ def _classify_time_window_probe(
         except ValueError:
             return None
 
-    start = year(params.get("startDate")) or year(params.get("start_year"))
-    end = year(params.get("endDate")) or year(params.get("end_year"))
+    start, end = _requested_window(params)
     if start is None and end is None:
         return [], ""
     recovered = []
@@ -1534,6 +1757,7 @@ def _classify_time_window_probe(
     inconclusive = False
     for original in result or []:
         series = original.model_copy(deep=True)
+        period_code = _series_period_for_points(series)
         kept = []
         for point in series.data or []:
             value = point.get("value") if isinstance(point, dict) else point.value
@@ -1547,9 +1771,8 @@ def _classify_time_window_probe(
             if date is None or not finite:
                 inconclusive = True
                 continue
-            point_year = date.year
             latest = max(latest, date.isoformat())
-            if (start is None or point_year >= start) and (end is None or point_year <= end):
+            if _observation_overlaps_window(date, period_code, start, end):
                 kept.append(point)
         if kept:
             series.data = kept
@@ -3842,6 +4065,20 @@ async def fetch_data(
         # must not reach the provider dispatch or cache identity.
         "__exclude_indicator_codes",
     }
+    # Window continuity on delta paths: a follow-up that keeps the indicator
+    # and carries the window the PREVIOUS turn already served (dates present
+    # before this fetch applies any default) must not have that window
+    # stripped up front just because the series is exact-locked — the prior
+    # turn served data in it, and the user's follow-up continues it. Read
+    # here because __delta_* flags are removed just below. Provenance stays
+    # truthful (a 'default' window stays 'default'), so the broadened
+    # exact-window retry still widens it when a newly added member has no
+    # observations inside it.
+    carried_delta_window = bool(
+        params.get("__delta_resolved")
+        and not params.get("__delta_indicator_changed")
+        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+    )
     if _has_statscan_mechanical_dimension_dispatch_authority(params):
         # These flags are still needed by the dispatch-level no-shortcut gate.
         # They authorize only a verified StatsCan table coordinate operation,
@@ -3892,11 +4129,17 @@ async def fetch_data(
     # the user did not ask for a time window, strip friendly default dates before
     # dispatch/cache materialization so sparse/stale exact series are not
     # blocked by a recent default window. Explicit time scopes remain strict.
+    def _strip_default_window_for_exact_match() -> bool:
+        return bool(
+            is_exact_match_locked(params)
+            and not carried_delta_window
+            and not _user_set_time_scope(params, intent.originalQuery or "")
+            and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+        )
+
     if (
         provider in {"FRED", "WORLDBANK", "WORLD BANK", "STATSCAN", "STATISTICS CANADA", "IMF"}
-        and is_exact_match_locked(params)
-        and not _user_set_time_scope(params, intent.originalQuery or "")
-        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+        and _strip_default_window_for_exact_match()
     ):
         params = dict(params)
         for key in ("startDate", "endDate", "start_year", "end_year"):
@@ -3909,9 +4152,7 @@ async def fetch_data(
     # before dispatch/cache identity materialization.
     if (
         provider == "COMTRADE"
-        and is_exact_match_locked(params)
-        and not _user_set_time_scope(params, intent.originalQuery or "")
-        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+        and _strip_default_window_for_exact_match()
     ):
         params = dict(params)
         for key in ("startDate", "endDate", "start_year", "end_year"):
@@ -3962,6 +4203,7 @@ async def fetch_data(
         svc._normalize_bis_metadata_labels(result_list)
         _restore_semantic_indicator_label_for_generic_metadata(result_list, params)
         result_list = _attach_requested_series_disclosure(result_list, params, intent)
+        result_list = _disclose_frequency_mismatch(result_list, params, getattr(intent, "language", None))
         if tracker:
             with tracker.track(
                 "cache_hit",
@@ -4185,7 +4427,10 @@ async def fetch_data(
         execution_plan.params,
         result if len(result) > 1 else result[0],
     )
-    return _attach_requested_series_disclosure(result, params, intent)
+    # After caching: both disclosures are per-request (the requested code /
+    # the language), never cached data.
+    result = _attach_requested_series_disclosure(result, params, intent)
+    return _disclose_frequency_mismatch(result, params, getattr(intent, "language", None))
 
 
 async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:

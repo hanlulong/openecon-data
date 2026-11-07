@@ -951,6 +951,66 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
 
 
 # ---------------------------------------------------------------------------
+# Shared time-scope / language materialization
+# ---------------------------------------------------------------------------
+
+def merged_time_scope(
+    state: ConversationState, delta: Optional[FollowUpDelta] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(start_date, end_date, time_scope_source) after applying ``delta``.
+
+    Mirrors merge_state's time section exactly (a delta date change is user
+    language -> 'user'; otherwise the state's recorded provenance is
+    inherited) so delta paths that build their intent WITHOUT merge_state —
+    the collective-member builders in query.py — cannot drift from it.
+    Pure structural provenance plumbing: no text is inspected.
+    """
+    start_date = getattr(state, "start_date", None)
+    end_date = getattr(state, "end_date", None)
+    source = getattr(state, "time_scope_source", None)
+    if delta is not None:
+        changed_start = getattr(delta, "changed_start_date", None)
+        changed_end = getattr(delta, "changed_end_date", None)
+        if changed_start:
+            start_date = changed_start
+        if changed_end:
+            end_date = changed_end
+        if changed_start or changed_end:
+            source = "user"
+    return start_date, end_date, source
+
+
+def materialize_time_scope(
+    state: ConversationState, delta: Optional[FollowUpDelta] = None,
+) -> Dict[str, Any]:
+    """Executable time parameters (dates + provenance stamp) for an intent.
+
+    The ONE state->params conversion for the time window. Whenever dates are
+    emitted and provenance is known, ``__time_scope_authority`` travels with
+    them, so downstream gates (exact-match date stripping, honesty filter,
+    broadened no-data retry) never fall back to re-inferring authority from
+    the raw follow-up text (which is language-dependent).
+    """
+    start_date, end_date, source = merged_time_scope(state, delta)
+    parameters: Dict[str, Any] = {}
+    if start_date:
+        parameters["startDate"] = start_date
+    if end_date:
+        parameters["endDate"] = end_date
+    if (start_date or end_date) and source:
+        parameters["__time_scope_authority"] = source
+    return parameters
+
+
+def merged_language(
+    state: ConversationState, delta: Optional[FollowUpDelta] = None,
+) -> Optional[str]:
+    """Response language after ``delta`` (explicit switch wins, else sticky)."""
+    changed = getattr(delta, "changed_language", None) if delta is not None else None
+    return changed or getattr(state, "language", None)
+
+
+# ---------------------------------------------------------------------------
 # materialize_intent
 # ---------------------------------------------------------------------------
 
@@ -972,13 +1032,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     elif state.countries and len(state.countries) == 1:
         parameters["country"] = state.countries[0]
 
-    # Time
-    if state.start_date:
-        parameters["startDate"] = state.start_date
-    if state.end_date:
-        parameters["endDate"] = state.end_date
-    if (state.start_date or state.end_date) and state.time_scope_source:
-        parameters["__time_scope_authority"] = state.time_scope_source
+    # Time (shared with the collective delta builders — see materialize_time_scope)
+    parameters.update(materialize_time_scope(state))
     if state.frequency:
         parameters["frequency"] = state.frequency
     if state.continuity_series:

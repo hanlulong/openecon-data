@@ -11114,9 +11114,14 @@ class QueryServiceTests(unittest.TestCase):
         # Fixture points must fall inside the user's "last 90 days" window —
         # the time-window honesty filter drops out-of-window observations, and
         # this test asserts coin/metric EXTRACTION, not window behavior.
+        # Dates are relative to today: the window is calendar-period-overlap
+        # strict (a fixed calendar date ages out of a relative window).
+        from datetime import date as _date, timedelta as _timedelta
+
         _recent = sample_series().model_copy(deep=True)
+        _recent.metadata.frequency = "daily"
         for _i, _p in enumerate(_recent.data):
-            _p.date = f"2026-0{5 + _i}-01"
+            _p.date = (_date.today() - _timedelta(days=10 * (_i + 1))).isoformat()
         with patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.coingecko_provider, "get_historical_data", return_value=[_recent]) as historical_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access

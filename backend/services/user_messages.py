@@ -197,6 +197,28 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "如需其他范围，请指明国家或地区。"
         ),
     },
+    # (3d) Served-vs-requested frequency reconciliation (data_fetcher
+    # _disclose_frequency_mismatch). {requested}/{native} are the structured
+    # frequency labels (requested from the parsed intent, native from the
+    # served series' metadata).
+    "frequency_mismatch_disclosure": {
+        "en": (
+            "This series is published at **{native}** frequency; you asked for "
+            "**{requested}** data. The data is shown at its native frequency."
+        ),
+        "zh": (
+            "该序列按**{native}**频率发布；您请求的是**{requested}**数据。"
+            "以下按其原始频率显示。"
+        ),
+    },
+    # Frequency-code display labels for the disclosure above (closed code
+    # table D/W/M/Q/S/A produced by data_fetcher._frequency_code).
+    "frequency_label_D": {"en": "daily", "zh": "日度"},
+    "frequency_label_W": {"en": "weekly", "zh": "周度"},
+    "frequency_label_M": {"en": "monthly", "zh": "月度"},
+    "frequency_label_Q": {"en": "quarterly", "zh": "季度"},
+    "frequency_label_S": {"en": "semi-annual", "zh": "半年度"},
+    "frequency_label_A": {"en": "annual", "zh": "年度"},
     # (4) Multi-indicator partial-failure note (data_fetcher.fetch_multi_indicator_data).
     "multi_indicator_partial": {
         "en": (

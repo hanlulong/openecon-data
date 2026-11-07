@@ -28,6 +28,17 @@ _RECENCY_CUE_RE = re.compile(
 )
 
 
+def _user_set_time_scope(params: dict) -> bool:
+    """Stamp-first: the recorded __time_scope_authority decides; the English
+    text heuristic below runs only for unstamped (legacy) params."""
+    from ..services.time_scope_provenance import stamped_user_time_scope
+
+    stamped = stamped_user_time_scope(params)
+    if stamped is not None:
+        return stamped
+    return _query_has_explicit_time_scope(str((params or {}).get("__original_query") or ""))
+
+
 def _query_has_explicit_time_scope(query: str) -> bool:
     """Detect whether the user explicitly constrained the requested time window."""
     query_text = str(query or "").strip()
@@ -564,7 +575,7 @@ class FREDProvider(BaseProvider):
         ):
             return False
 
-        if _query_has_explicit_time_scope(str(params.get("__original_query") or "")):
+        if _user_set_time_scope(params):
             return False
 
         requested_start = _parse_iso_date(params.get("startDate"))
@@ -704,7 +715,7 @@ class FREDProvider(BaseProvider):
                 params.get("__exact_indicator_title_match")
                 or params.get("__exact_provider_code_match")
             )
-            and not _query_has_explicit_time_scope(str(params.get("__original_query") or ""))
+            and not _user_set_time_scope(params)
             and not observations
             and (obs_params.get("observation_start") or obs_params.get("observation_end"))
         ):

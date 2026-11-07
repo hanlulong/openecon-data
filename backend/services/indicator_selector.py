@@ -1350,11 +1350,81 @@ class IndicatorSelector:
         if retry_result and (retry_result.code or retry_result.needs_user_choice):
             return retry_result
 
+        # The LLM rejected (or could not pick from) every frequency/unit/
+        # measurement-compatible candidate. When the ORIGINAL pick's only
+        # conflict is FREQUENCY, it is still the right concept: keep it,
+        # annotated so the response discloses the native frequency, instead
+        # of discarding it and letting a later top-5 re-ask force a
+        # different-concept pick (correctness beats a metadata preference).
+        # Unit/measurement conflicts (nominal vs real, level vs % change) are
+        # materially different data and keep the fail-closed behavior.
+        mismatch = await asyncio.to_thread(
+            self._frequency_only_conflict, query, result.code, candidates, provider
+        )
+        if mismatch:
+            logger.info(
+                "Metadata conflict is frequency-only for %s (requested=%s native=%s); "
+                "keeping the original pick with a disclosure instead of re-asking",
+                result.code,
+                mismatch.get("requested_frequency"),
+                mismatch.get("native_frequency"),
+            )
+            result.metadata_mismatch = mismatch
+            return result
+
         return SelectionResult(
             code=None,
             source="metadata_conflict",
             rejection_reason="LLM pick contradicted explicit frequency/unit/measurement metadata.",
         )
+
+    def _frequency_only_conflict(
+        self,
+        query: str,
+        selected_code: Any,
+        candidates: List[tuple[str, str]],
+        provider: str,
+    ) -> Optional[Dict[str, str]]:
+        """Return {requested_frequency, native_frequency} when the selected
+        candidate contradicts ONLY the requested frequency (its unit and
+        measurement metadata satisfy the query's explicit constraints).
+
+        Structural metadata comparison (same predicates as
+        _metadata_compatible_subset); None when the conflict involves unit or
+        measurement, when the frequency actually matches, or when metadata
+        is unavailable.
+        """
+        requested_frequencies = _extract_requested_frequencies(query)
+        if not requested_frequencies:
+            return None
+        normalized_selected = self._normalize_code(str(selected_code or ""), provider)
+        selected_candidate = next(
+            (
+                candidate
+                for candidate in candidates
+                if self._normalize_code(str(candidate[0] or ""), provider) == normalized_selected
+            ),
+            None,
+        )
+        if selected_candidate is None:
+            return None
+        enriched = self._enrich_candidates([selected_candidate], provider)
+        meta = enriched[0] if enriched else {}
+        native_frequency = str(meta.get("frequency") or "").strip()
+        if not native_frequency or _frequency_matches(requested_frequencies, native_frequency):
+            return None
+        requested_unit_tokens = _extract_requested_unit_tokens(query)
+        if requested_unit_tokens and not _unit_matches(requested_unit_tokens, str(meta.get("unit") or "")):
+            return None
+        requested_measurements = _extract_requested_measurement_qualifiers(query)
+        if requested_measurements and not _measurement_matches(
+            requested_measurements, self._candidate_metadata_text(meta)
+        ):
+            return None
+        return {
+            "requested_frequency": ",".join(sorted(requested_frequencies)),
+            "native_frequency": native_frequency,
+        }
 
     def _metadata_compatible_subset(
         self,
@@ -2172,6 +2242,7 @@ class SelectionResult:
         rejection_reason: str = "",
         retry_query: str = "",
         made_under_prefer_ask: bool = False,
+        metadata_mismatch: Optional[Dict[str, str]] = None,
     ):
         self.code = code
         self.name = name
@@ -2185,6 +2256,11 @@ class SelectionResult:
         # `authoritative` property): the request-level authority contract only
         # trusts a pick made from a clearly-separated candidate field.
         self.made_under_prefer_ask = bool(made_under_prefer_ask)
+        # Set when the pick was KEPT despite contradicting the requested
+        # frequency (frequency-only metadata conflict, no compatible
+        # alternative accepted): {requested_frequency, native_frequency}.
+        # Such a pick is served with a disclosure and is never authoritative.
+        self.metadata_mismatch = dict(metadata_mismatch) if metadata_mismatch else None
 
     @property
     def needs_user_choice(self) -> bool:
@@ -2202,7 +2278,12 @@ class SelectionResult:
         It never suppresses refusal of wrong data — that is enforced structurally
         at the consumption seam.
         """
-        return bool(self.code) and self.source == "llm_pick" and not self.made_under_prefer_ask
+        return (
+            bool(self.code)
+            and self.source == "llm_pick"
+            and not self.made_under_prefer_ask
+            and not getattr(self, "metadata_mismatch", None)
+        )
 
     @property
     def rejected_candidates(self) -> bool:

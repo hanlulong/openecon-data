@@ -29,7 +29,10 @@ from ..services.conversation import conversation_manager
 from ..services.conversation_state_v2 import (
     extract_state_from_intent,
     materialize_intent,
+    materialize_time_scope,
     merge_new_state_with_previous,
+    merged_language,
+    merged_time_scope,
     merge_state,
     reset_state_for_topic_change,
     update_answer_members_from_data,
@@ -2802,12 +2805,12 @@ class QueryService:
             else:
                 params["countries"] = countries
 
-        start_date = delta.changed_start_date or getattr(state, "start_date", None)
-        end_date = delta.changed_end_date or getattr(state, "end_date", None)
-        if start_date:
-            params["startDate"] = start_date
-        if end_date:
-            params["endDate"] = end_date
+        # Dates + provenance stamp through the SAME state->params conversion
+        # materialize_intent uses (merge_state semantics: a delta date change
+        # is 'user', otherwise the recorded source is inherited) — without the
+        # stamp, exact-locked members fell back to re-inferring authority from
+        # the raw (possibly non-English) follow-up text and lost the window.
+        params.update(materialize_time_scope(state, delta))
 
         indicator_changed = bool(delta.changed_indicator or not getattr(member, "provider_code", None))
         params["__delta_indicator_changed"] = indicator_changed
@@ -2831,6 +2834,7 @@ class QueryService:
             confidence=0.9,
             originalQuery=query,
             resolvedQuery=member_query,
+            language=merged_language(state, delta),
             isFollowUp=True,
             followUpType=delta.delta_type,
         )
@@ -3043,10 +3047,7 @@ class QueryService:
                 response_params["__semantic_authority"] = "llm_adjudication"
                 response_params["__exact_provider_code_match"] = True
                 response_params["__decision_source"] = "collective_single_member_addition"
-        if delta.changed_start_date or getattr(state, "start_date", None):
-            response_params["startDate"] = delta.changed_start_date or getattr(state, "start_date", None)
-        if delta.changed_end_date or getattr(state, "end_date", None):
-            response_params["endDate"] = delta.changed_end_date or getattr(state, "end_date", None)
+        response_params.update(materialize_time_scope(state, delta))
         if collective_indicator_label:
             response_params["__semantic_indicator_label"] = collective_indicator_label
 
@@ -3057,6 +3058,7 @@ class QueryService:
             clarificationNeeded=False,
             confidence=0.9,
             originalQuery=query,
+            language=merged_language(state, delta),
             isFollowUp=True,
             followUpType=delta.delta_type,
         )
@@ -3071,8 +3073,14 @@ class QueryService:
         updated_state = state.model_copy(deep=True)
         updated_state.turn_number = getattr(state, "turn_number", 0) + 1
         updated_state.original_query = query
-        updated_state.start_date = delta.changed_start_date or getattr(state, "start_date", None)
-        updated_state.end_date = delta.changed_end_date or getattr(state, "end_date", None)
+        # Persist provenance + language with the window so turn N+1 inherits
+        # the truthful source (merge_state semantics), not a stale one.
+        (
+            updated_state.start_date,
+            updated_state.end_date,
+            updated_state.time_scope_source,
+        ) = merged_time_scope(state, delta)
+        updated_state.language = merged_language(state, delta)
         if collective_indicator_label:
             updated_state.indicator = collective_indicator_label
             updated_state.base_indicator = None

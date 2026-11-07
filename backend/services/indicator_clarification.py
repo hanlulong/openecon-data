@@ -4277,6 +4277,26 @@ def build_indicator_mismatch_hint(query: str, top_series: Any) -> Optional[str]:
     return None
 
 
+def _follow_up_retrieval_query(qs: Any, intent: Optional[ParsedIntent]) -> str:
+    """Structured concept(+country) retrieval text for follow-up intents ("" otherwise)."""
+    from .follow_up_retrieval import follow_up_retrieval_text
+
+    params = dict(getattr(intent, "parameters", None) or {})
+    country = params.get("country")
+    if not country and isinstance(params.get("countries"), list) and len(params["countries"]) == 1:
+        country = params["countries"][0]
+    country_label = ""
+    if country:
+        try:
+            from .data_fetcher import _country_label_for_iso2
+
+            iso2 = qs._normalize_country_to_iso2(country) if hasattr(qs, "_normalize_country_to_iso2") else None
+            country_label = _country_label_for_iso2(iso2 or str(country), country)
+        except Exception:
+            country_label = str(country)
+    return follow_up_retrieval_text(intent, params, country_label)
+
+
 def build_no_data_indicator_clarification(
     qs: Any,
     conversation_id: str,
@@ -4292,12 +4312,16 @@ def build_no_data_indicator_clarification(
     if intent.indicators and len(intent.indicators) > 1:
         return None
 
+    # On a follow-up the raw query is the delta utterance ("和日本比较"); menu
+    # RETRIEVAL uses the structured concept text instead. The raw query stays
+    # the pending-choice record (history/language) below.
+    retrieval_query = _follow_up_retrieval_query(qs, intent) or query
     options = dedupe_indicator_choice_options(
         qs,
-        qs._collect_indicator_choice_options(query=query, intent=intent, max_options=4),
+        qs._collect_indicator_choice_options(query=retrieval_query, intent=intent, max_options=4),
     )
     if len(options) < 2:
-        for variant in _provider_native_query_variants(qs, query, intent)[1:]:
+        for variant in _provider_native_query_variants(qs, retrieval_query, intent)[1:]:
             options = dedupe_indicator_choice_options(
                 qs,
                 qs._collect_indicator_choice_options(query=variant, intent=intent, max_options=4),
