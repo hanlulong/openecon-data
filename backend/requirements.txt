@@ -8,10 +8,19 @@ pybreaker==1.4.1
 tenacity>=9.1,<10
 python-dotenv>=1.0.1
 pydantic>=2.7.0
-pydantic-settings>=2.2.1
+pydantic-settings>=2.5.2  # fastapi-mcp 0.4.0 requires >=2.5.2
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-fastapi-mcp>=0.4.0
+# main.py works around fastapi_mcp 0.4.0 internals (server.server.version /
+# .instructions), and fastapi-mcp 0.4.0 breaks on mcp 2.x
+# (tadata-org/fastapi_mcp#321), so stay on these lines. mcp is imported
+# directly by mcp_transport.py (StreamableHTTPSessionManager); 1.18.0 is the
+# SDK that transport was built and tested against.
+fastapi-mcp>=0.4.0,<0.5
+mcp>=1.18.0,<2
+# Imported unguarded at backend/services/openrouter.py:26; from_openai() and
+# Mode.JSON exist since instructor 1.0.0.
+instructor>=1.0.0
 pytest>=8.3.3,<9
 pytest-asyncio>=0.21.0
 pytest-env>=1.1.5,<1.2
