@@ -143,12 +143,20 @@ const ACTIVE_EXAMPLE_QUERIES =
     ? EXAMPLE_QUERIES_ZH
     : EXAMPLE_QUERIES
 
+// Every chat owns an explicit, client-minted conversation id. The backend
+// accepts an unknown id (ConversationManager.get_or_create creates the
+// conversation under it, bound to this caller's owner key), whereas a request
+// with NO id falls back to the anonymous sessionId — which is shared by every
+// chat in the browser, so "New chat" would silently continue the previous
+// conversation (inherited country, date window, clarification state).
+const newConversationId = (): string => crypto.randomUUID()
+
 export function ChatPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [query, setQuery] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
-  const [conversationId, setConversationId] = useState<string | undefined>()
+  const [conversationId, setConversationId] = useState<string>(newConversationId)
   const [loadingStatus, setLoadingStatus] = useState<string>('')
   const [activeProcessingSteps, setActiveProcessingSteps] = useState<ProcessingTimelineStep[]>([])
 
@@ -662,7 +670,7 @@ export function ChatPage() {
 
     // Clear all state
     setMessages([])
-    setConversationId(undefined)
+    setConversationId(newConversationId())
     setQuery('')
     setSearchQuery('')
 

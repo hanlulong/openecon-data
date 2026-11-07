@@ -127,6 +127,22 @@ async def test_gate_decision_identical_across_modes(monkeypatch, mode):
     assert gate.session_id == "s1"
 
 
+async def test_gate_key_is_session_not_conversation(monkeypatch):
+    """The browser mints a NEW conversationId per chat ("New chat") under one
+    stable sessionId. The free-query quota must key on the session, so a fresh
+    conversation id never resets or bypasses the anonymous limit."""
+    monkeypatch.setattr(m.settings, "anon_query_limit", 20)
+    monkeypatch.setattr(m.settings, "anon_identity_mode", "legacy")
+    req = _Req({"user-agent": "pytest"})
+    _install_count(monkeypatch, 21)
+    keys = set()
+    for conv_id in ("chat-a", "chat-b", "chat-c"):
+        gate = await m.check_anon_gate(req, user=None, body_session_id="s1", conversation_id=conv_id)
+        assert gate.blocked is True
+        keys.add(gate.session_id)
+    assert keys == {"s1"}
+
+
 async def test_shadow_logs_once_legacy_does_not(monkeypatch, caplog):
     monkeypatch.setattr(m.settings, "anon_query_limit", 20)
     req = _Req({"user-agent": "pytest"})

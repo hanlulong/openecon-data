@@ -311,6 +311,56 @@ class TestLastIntent:
         assert retrieved.apiProvider == "WORLDBANK"
 
 
+class TestClientMintedConversationIsolation:
+    """The browser mints one conversation id per chat ("New chat" = new id)
+    while the anonymous sessionId stays constant. Distinct client ids under the
+    SAME owner must be fully isolated conversations; sharing state between
+    them is what made a fresh chat inherit the previous chat's country/dates."""
+
+    def test_distinct_client_ids_same_owner_do_not_share_state(self):
+        from backend.models import ParsedIntent
+        mgr = _fresh_manager()
+        owner = "anon:session-1"
+
+        chat_a = mgr.get_or_create("client-chat-a", owner_key=owner)
+        assert chat_a == "client-chat-a"  # unknown client id is adopted as-is
+        mgr.add_message(
+            chat_a, "user", "inflation in China",
+            intent=ParsedIntent(
+                apiProvider="IMF", indicators=["inflation"], clarificationNeeded=False,
+                parameters={"country": "China", "startDate": "2021-01-01"},
+            ),
+        )
+        mgr.set_pending_semantic_clarification(chat_a, {
+            "kind": "concept_variant",
+            "original_query": "inflation in China",
+            "question_lines": ["Which inflation measure?", "1. CPI"],
+            "options": [{"id": "1", "label": "CPI", "value": "CPI inflation in China"}],
+        })
+        assert mgr.get_pending_clarification_context(chat_a) is not None
+
+        chat_b = mgr.get_or_create("client-chat-b", owner_key=owner)
+        assert chat_b == "client-chat-b"
+        assert mgr.get_history(chat_b) == []
+        assert mgr.get_last_intent(chat_b) is None
+        assert mgr.get_pending_clarification_context(chat_b) is None
+
+        # The original chat is untouched and still resumable by its owner.
+        assert mgr.get_or_create(chat_a, owner_key=owner) == chat_a
+        assert mgr.get_history(chat_a) == ["inflation in China"]
+        assert mgr.get_last_intent(chat_a).parameters["country"] == "China"
+
+    def test_client_minted_id_is_bound_to_its_owner(self):
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create("client-chat-x", owner_key="anon:session-1")
+        mgr.add_message(cid, "user", "private turn")
+
+        # A different identity presenting the same id gets a fresh conversation.
+        other = mgr.get_or_create("client-chat-x", owner_key="anon:session-2")
+        assert other != cid
+        assert mgr.get_history(other) == []
+
+
 # ─── Thread Safety ───────────────────────────────────────────────────
 
 class TestThreadSafety:

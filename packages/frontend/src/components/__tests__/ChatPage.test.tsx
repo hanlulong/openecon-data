@@ -465,6 +465,49 @@ describe('ChatPage', () => {
         expect(screen.getByText(/What can I help with/i)).toBeInTheDocument();
       });
     });
+
+    // Regression: anonymous "New chat" used to reset conversationId to
+    // undefined, so the next request carried only sessionId and the backend's
+    // sessionId fallback continued the SAME server conversation (inherited
+    // country/date window). Every chat must own an explicit, distinct id.
+    it('sends an explicit conversationId and a fresh one after New chat', async () => {
+      const user = userEvent.setup();
+      // Echo the client id back exactly as the backend does for a new id.
+      mocks.mockApi.queryStream.mockImplementation(async (_q, conversationId, callbacks) => {
+        callbacks.onDone?.(conversationId);
+      });
+
+      renderChatPage();
+
+      const input = await screen.findByPlaceholderText(/Ask about economic data/i);
+      await user.type(input, 'inflation in China');
+      fireEvent.submit(input.closest('form')!);
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(1));
+      const firstId = mocks.mockApi.queryStream.mock.calls[0][1];
+      expect(typeof firstId).toBe('string');
+      expect(firstId).not.toBe('');
+      // Must not be (or depend on) the anonymous session id.
+      expect(firstId).not.toBe('test-session-id');
+
+      // A follow-up in the SAME chat keeps the id.
+      await user.type(await screen.findByPlaceholderText(/Ask about economic data/i), 'and in the US');
+      fireEvent.submit(screen.getByPlaceholderText(/Ask about economic data/i).closest('form')!);
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(2));
+      expect(mocks.mockApi.queryStream.mock.calls[1][1]).toBe(firstId);
+
+      // New chat must start a NEW server conversation.
+      await user.click(await screen.findByText(/New chat/i));
+      await user.type(await screen.findByPlaceholderText(/Ask about economic data/i), 'inflation');
+      fireEvent.submit(screen.getByPlaceholderText(/Ask about economic data/i).closest('form')!);
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(3));
+      const newChatId = mocks.mockApi.queryStream.mock.calls[2][1];
+      expect(typeof newChatId).toBe('string');
+      expect(newChatId).not.toBe('');
+      expect(newChatId).not.toBe(firstId);
+      expect(newChatId).not.toBe('test-session-id');
+
+      mocks.mockApi.queryStream.mockReset();
+    });
   });
 
   describe('search', () => {
@@ -566,7 +609,8 @@ describe('ChatPage', () => {
       await waitFor(() => {
         expect(mocks.mockApi.queryStream).toHaveBeenCalledWith(
           expect.stringContaining('US unemployment rate'),
-          undefined,
+          // A fresh chat always carries its own explicit conversation id.
+          expect.any(String),
           expect.any(Object),
           expect.any(Object),
         );
