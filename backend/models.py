@@ -263,6 +263,11 @@ class QueryResponse(BaseModel):
     # Internal flag: delta path already saved conversation state — skip
     # the guaranteed save in main.py to avoid overwriting the merged state.
     delta_state_saved: bool = Field(default=False, exclude=True)
+    # Internal: FETCHED coverage fact (data_fetcher.WindowCoverage) behind a
+    # no_data_in_requested_window response, so result-stage checks (the
+    # subnational fail-closed) can test the served series' real metadata.
+    # Never serialized.
+    windowCoverage: Optional[Any] = Field(default=None, exclude=True)
 
     @field_validator("error", mode="before")
     @classmethod

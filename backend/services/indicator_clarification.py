@@ -2747,6 +2747,64 @@ async def filter_viable_indicator_choice_options(
     return viable_options
 
 
+_REGION_NOT_COVERED_REASON = "substantive:region_not_covered"
+
+
+def build_all_options_region_uncovered_response(
+    conversation_id: str,
+    intent: ParsedIntent,
+    viable_options: List[str],
+    evidence: Optional[Dict[str, Any]],
+    processing_steps: Optional[List[Any]] = None,
+) -> Optional[QueryResponse]:
+    """Subnational fail-closed when EVERY indicator-choice option failed the region check.
+
+    Keys only on the viability filter's FETCH-validated drop reasons (each
+    option was fetched and its served metadata tested by the same
+    region-reference predicate the result stage uses) — never on option
+    label text. Returns None (menu proceeds unchanged) unless the user named
+    a sub-country region, nothing survived, and every drop is
+    ``substantive:region_not_covered``; a single transient / other drop keeps
+    today's behavior. Wording is deliberately weaker than "not published":
+    no re-adjudication ran.
+    """
+    region = str(getattr(intent, "subnationalRegion", "") or "").strip()
+    dropped = (evidence or {}).get("dropped") or {}
+    if (
+        not region
+        or viable_options
+        or not dropped
+        or any(str(reason) != _REGION_NOT_COVERED_REASON for reason in dropped.values())
+    ):
+        return None
+    from .user_messages import get_message as _um_get
+
+    provider = str(getattr(intent, "apiProvider", "") or "the provider")
+    message = _um_get(
+        "subnational_options_not_found",
+        getattr(intent, "language", None),
+        region=region,
+        provider=provider,
+    ) or (
+        f"⚠️ **No {region}-level series found**\n\nNone of the candidate series "
+        f"for this indicator at **{provider}** refer to **{region}**, so no "
+        f"{region}-level data can be shown."
+    )
+    logger.info(
+        "subnational_options_fail_closed %s",
+        json.dumps({"region": region, "provider": provider, "dropped": len(dropped)}, ensure_ascii=False),
+    )
+    return QueryResponse(
+        conversationId=conversation_id,
+        intent=intent,
+        data=None,
+        clarificationNeeded=False,
+        error="subnational_data_unavailable",
+        message=message,
+        processingSteps=processing_steps,
+    )
+
+
 def build_failed_indicator_choice_response(
     qs: Any,
     conversation_id: str,
@@ -3109,6 +3167,19 @@ async def build_prefetch_indicator_choice_clarification(
             max_options=option_budget,
             collector=_viability_evidence,
         )
+        _region_fail_closed = build_all_options_region_uncovered_response(
+            conversation_id=conversation_id,
+            intent=intent,
+            viable_options=viable_options,
+            evidence=_viability_evidence,
+            processing_steps=processing_steps,
+        )
+        if _region_fail_closed is not None:
+            # Before any menu (and its pending options) is built: every
+            # candidate was FETCHED and none references the requested region,
+            # so showing the unfiltered menu would offer only non-regional
+            # series for a regional ask.
+            return _region_fail_closed
         if len(viable_options) >= 2:
             options = viable_options
         elif len(viable_options) == 1 and (

@@ -110,6 +110,79 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "您可以查询其他时段或最新可用数据。"
         ),
     },
+    # (3c) Same, scoped to the ONE served series ({series} = "CODE (title)"),
+    # never to the user's concept: other series for the concept may well cover
+    # the period. Dates are what was RETRIEVED, not a publication schedule.
+    # {direction} = optional rendered window_period_* sentence (may be "").
+    "no_observations_in_window_series_range": {
+        "en": (
+            "⚠️ **No observations in the requested period**\n\n"
+            "The retrieved observations for series {series} run from "
+            "**{earliest}** to **{latest}**.{direction} "
+            "No observations were found for this series in the requested period. "
+            "Other series for this indicator may cover it — you can ask for a "
+            "different period, the latest available data, or another series."
+        ),
+        "zh": (
+            "⚠️ **所请求时段内没有观测数据**\n\n"
+            "检索到的序列 {series} 的观测数据范围为 **{earliest}** 至 **{latest}**。"
+            "{direction}未找到该序列在所请求时段内的观测数据。"
+            "该指标的其他序列可能覆盖此时段——您可以查询其他时段、最新可用数据或其他序列。"
+        ),
+    },
+    "no_observations_in_window_series_latest": {
+        "en": (
+            "⚠️ **No observations in the requested period**\n\n"
+            "The latest retrieved observation for series {series} is "
+            "**{latest}**.{direction} "
+            "No observations were found for this series in the requested period. "
+            "Other series for this indicator may cover it — you can ask for a "
+            "different period, the latest available data, or another series."
+        ),
+        "zh": (
+            "⚠️ **所请求时段内没有观测数据**\n\n"
+            "检索到的序列 {series} 最新的数据点为 **{latest}**。"
+            "{direction}未找到该序列在所请求时段内的观测数据。"
+            "该指标的其他序列可能覆盖此时段——您可以查询其他时段、最新可用数据或其他序列。"
+        ),
+    },
+    "window_period_before_earliest": {
+        "en": " The requested period is earlier than {earliest}.",
+        "zh": "所请求时段早于 {earliest}。",
+    },
+    "window_period_after_latest": {
+        "en": " The requested period is later than {latest}.",
+        "zh": "所请求时段晚于 {latest}。",
+    },
+    # (2b) Subnational fail-closed on NO-DATA paths (window miss / menu where
+    # every fetched candidate failed the region check). Weaker than
+    # subnational_national_only on purpose: nothing was served, and no
+    # re-adjudication ran, so it never claims the region is "not published".
+    "subnational_series_not_found": {
+        "en": (
+            "⚠️ **No {region}-level series found**\n\n"
+            "No **{region}**-level series for this indicator was found at "
+            "**{provider}**. The closest match, {national}, does not refer to "
+            "{region}."
+        ),
+        "zh": (
+            "⚠️ **未找到 {region} 级别的序列**\n\n"
+            "在 **{provider}** 未找到该指标的 **{region}** 级别序列。"
+            "最接近的匹配 {national} 并非 {region} 的数据。"
+        ),
+    },
+    "subnational_options_not_found": {
+        "en": (
+            "⚠️ **No {region}-level series found**\n\n"
+            "None of the candidate series for this indicator at **{provider}** "
+            "refer to **{region}**, so no {region}-level data can be shown."
+        ),
+        "zh": (
+            "⚠️ **未找到 {region} 级别的序列**\n\n"
+            "{provider} 上该指标的候选序列均不涉及 **{region}**，"
+            "因此无法提供 {region} 级别的数据。"
+        ),
+    },
     # (3c) Provider-default geography disclosure (query._disclose_default_geography).
     # Worded for "not resolved", not "not specified": the user may have named
     # a place the framework could not resolve. {scope} = served geography code.

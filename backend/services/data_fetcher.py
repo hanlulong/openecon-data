@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 import math
@@ -3092,6 +3093,139 @@ def _carried_indicator_dispatchable_as_is(
     )
 
 
+# ---------------------------------------------------------------------------
+# Structured window-coverage fact for no_data_in_requested_window failures.
+#
+# The legacy string marker ("no_data_in_requested_window ... latest_available=")
+# stays verbatim in str(exc) for every substring consumer; the coverage below is
+# carried as an ATTRIBUTE (``exc.window_coverage``) so the response layer can
+# scope its explanation to the SERVED series (code + title) rather than the
+# user's concept, and the subnational fail-closed can test FETCHED metadata.
+# Free text (titles) never goes into the regex-parsed string.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class WindowCoverage:
+    """FETCHED observation coverage of the series behind a window miss.
+
+    ``earliest`` is set ONLY from the unwindowed diagnostic probe (the minimum
+    finite observation date it returned) and is "" whenever it is not provable
+    — never from a windowed fetch, catalog start dates, or derived metadata.
+    Dates are observational ("retrieved"), not publication-schedule claims.
+    """
+
+    provider: str
+    latest: str
+    earliest: str = ""
+    window_start_year: Optional[int] = None
+    window_end_year: Optional[int] = None
+    series_metadata: tuple = ()
+
+    def single_series(self) -> Optional[Metadata]:
+        """The served series' metadata when exactly ONE identity was fetched."""
+        identities = {}
+        for meta in self.series_metadata:
+            key = (
+                str(getattr(meta, "seriesId", "") or "").strip().upper(),
+                str(getattr(meta, "indicator", "") or "").strip(),
+                str(getattr(meta, "country", "") or "").strip().upper(),
+            )
+            identities.setdefault(key, meta)
+        return next(iter(identities.values())) if len(identities) == 1 else None
+
+    def direction(self) -> str:
+        """'before' / 'after' when the window lies wholly outside the
+        retrieved span (year-level, matching the window convention), else ''."""
+        def _y(text: str) -> Optional[int]:
+            head = str(text or "")[:4]
+            return int(head) if head.isdigit() else None
+
+        earliest_year, latest_year = _y(self.earliest), _y(self.latest)
+        if (
+            self.window_start_year is not None
+            and latest_year is not None
+            and self.window_start_year > latest_year
+        ):
+            return "after"
+        if (
+            self.window_end_year is not None
+            and earliest_year is not None
+            and self.window_end_year < earliest_year
+        ):
+            return "before"
+        return ""
+
+
+def _window_bound_years(params: dict) -> tuple[Optional[int], Optional[int]]:
+    """Year bounds of the requested window; never raises (structural parse)."""
+    def _y(value: Any) -> Optional[int]:
+        head = str(value or "")[:4]
+        return int(head) if head.isdigit() else None
+
+    params = params or {}
+    return (
+        _y(params.get("startDate")) or _y(params.get("start_year")),
+        _y(params.get("endDate")) or _y(params.get("end_year")),
+    )
+
+
+def _probe_earliest_observation(result: List[NormalizedData]) -> str:
+    """Minimum finite observation date of an UNWINDOWED probe, or "".
+
+    Mirrors the probe classifier's conclusiveness rule: any non-null point with
+    an unparseable date or non-finite value makes the bound unprovable ("").
+    """
+    from ..providers._sdmx.periods import period_to_iso_date
+
+    earliest = ""
+    for series in result or []:
+        for point in getattr(series, "data", None) or []:
+            value = point.get("value") if isinstance(point, dict) else getattr(point, "value", None)
+            if value is None:
+                continue
+            raw = point.get("date", "") if isinstance(point, dict) else getattr(point, "date", "")
+            normalized = period_to_iso_date(raw)
+            try:
+                finite = math.isfinite(value)
+            except (TypeError, ValueError, OverflowError):
+                finite = False
+            if not finite or not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[Tt ].+)?", str(normalized or "")):
+                return ""
+            day = str(normalized)[:10]
+            if not earliest or day < earliest:
+                earliest = day
+    return earliest
+
+
+def _window_marker_error(
+    marker_text: str,
+    *,
+    provider: str,
+    params: dict,
+    latest: str,
+    series: List[NormalizedData],
+    earliest: str = "",
+) -> DataNotAvailableError:
+    """Build the window-marker exception with its structured coverage attached."""
+    exc = DataNotAvailableError(marker_text)
+    try:
+        start_year, end_year = _window_bound_years(params)
+        exc.window_coverage = WindowCoverage(  # type: ignore[attr-defined]
+            provider=str(provider or ""),
+            latest=str(latest or "")[:10],
+            earliest=str(earliest or "")[:10],
+            window_start_year=start_year,
+            window_end_year=end_year,
+            series_metadata=tuple(
+                series_item.metadata.model_copy(deep=True)
+                for series_item in (series or [])
+                if getattr(series_item, "metadata", None) is not None
+            ),
+        )
+    except Exception as coverage_exc:  # coverage is advisory; marker must still raise
+        logger.debug("Window coverage capture skipped: %s", coverage_exc)
+    return exc
+
+
 async def fetch_data(
     svc: Any,
     intent: ParsedIntent,
@@ -3480,10 +3614,19 @@ async def fetch_data(
         if recovered:
             return recovered
         if latest:
-            raise DataNotAvailableError(
+            # The probe is UNWINDOWED, so its minimum observation is the only
+            # provable "earliest retrieved" bound (never the windowed fetch).
+            earliest = _probe_earliest_observation(probe_result)
+            raise _window_marker_error(
                 "no_data_in_requested_window: the selected series has no "
                 "observations inside the user-requested time window. "
                 f"latest_available={latest}"
+                + (f" earliest_available={earliest}" if earliest else ""),
+                provider=execution_plan.provider or provider,
+                params=params,
+                latest=latest,
+                earliest=earliest,
+                series=probe_result,
             )
         return None
 
@@ -3596,6 +3739,7 @@ async def fetch_data(
                 )
                 if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > _latest_obs:
                     _latest_obs = _pd
+    _pre_window_series = list(result or [])
     result = _enforce_user_time_window(params, intent.originalQuery or "", result)
     if _had_observations and not result:
         # The provider HAS this series — every observation just falls outside
@@ -3604,10 +3748,16 @@ async def fetch_data(
         # and NO fallback provider can fix a window constraint; the
         # latest-available date lets the response layer tell the user exactly
         # how far the data goes instead of a generic "no data".
-        raise DataNotAvailableError(
+        # No earliest bound here: this payload came from a WINDOWED request,
+        # so its minimum date is not the series' first observation.
+        raise _window_marker_error(
             "no_data_in_requested_window: the series exists but has no "
             "observations inside the user-requested time window. "
-            f"latest_available={_latest_obs or 'unknown'}"
+            f"latest_available={_latest_obs or 'unknown'}",
+            provider=execution_plan.provider or provider,
+            params=params,
+            latest=_latest_obs,
+            series=_pre_window_series,
         )
 
     if not result or (len(result) == 1 and not result[0].data):

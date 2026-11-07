@@ -4151,30 +4151,81 @@ class QueryService:
 
 
     @staticmethod
-    def _render_window_marker_response(conv_id, intent, tracker, exc_text: str):
+    def _series_display_label(metadata: Any) -> str:
+        """"**CODE** (title, country)" for a served series; structural only."""
+        code = str(getattr(metadata, "seriesId", "") or "").strip()
+        title = str(getattr(metadata, "indicator", "") or "").strip()
+        country = str(getattr(metadata, "country", "") or "").strip()
+        detail = ", ".join(part for part in (title, country) if part and part != code)
+        if code:
+            return f"**{code}**" + (f" ({detail})" if detail else "")
+        return f"**{detail}**" if detail else ""
+
+    @staticmethod
+    def _render_window_marker_response(conv_id, intent, tracker, exc_text: Any):
         """Bare empty response for a no_data_in_requested_window failure.
 
-        When the marker carries a usable latest_available date, render the
-        localized observed-coverage explanation directly (finalizer passes
-        message-bearing responses through); otherwise leave the response bare
-        so the finalizer stamps its scope-aware generic explanation.
+        ``exc_text`` is the marker exception (or its legacy string). When the
+        exception carries a structured ``window_coverage`` for exactly ONE
+        served series, the explanation is scoped to that series (code + title)
+        with its retrieved observation span — never presented as the
+        CONCEPT's latest, since other series may cover the period. Otherwise
+        (multi-series, legacy string) the latest_available date renders the
+        concept-scoped explanation; with no usable date the response stays
+        bare so the finalizer stamps its scope-aware generic explanation.
         """
         import re as _re
 
         from .user_messages import get_message as _um_get
 
+        coverage = getattr(exc_text, "window_coverage", None)
+        exc_text = str(exc_text or "")
+        language = getattr(intent, "language", None)
         message = None
         error = None
-        match = _re.search(r"latest_available=([0-9]{4}[0-9-]*)", str(exc_text or ""))
-        if match:
+        match = _re.search(r"latest_available=([0-9]{4}[0-9-]*)", exc_text)
+        latest = match.group(1)[:10] if match else ""
+        served = None
+        if coverage is not None:
+            try:
+                latest = str(getattr(coverage, "latest", "") or latest)[:10]
+                if latest and not latest[:4].isdigit():
+                    latest = ""
+                served = coverage.single_series()
+            except Exception:  # coverage is advisory — fall back to the string
+                served = None
+        label = QueryService._series_display_label(served) if served is not None else ""
+        if latest and label:
+            earliest = str(getattr(coverage, "earliest", "") or "")[:10]
+            direction = coverage.direction()
+            direction_text = ""
+            if direction == "before" and earliest:
+                direction_text = _um_get(
+                    "window_period_before_earliest", language, earliest=earliest,
+                )
+            elif direction == "after":
+                direction_text = _um_get(
+                    "window_period_after_latest", language, latest=latest,
+                )
+            message = _um_get(
+                "no_observations_in_window_series_range" if earliest
+                else "no_observations_in_window_series_latest",
+                language,
+                series=label,
+                earliest=earliest,
+                latest=latest,
+                direction=direction_text,
+            )
+            error = "no_data_in_requested_window"
+        elif latest:
             indicator = ", ".join(intent.indicators or []) if intent else ""
             country = str(((intent.parameters or {}).get("country") or "")) if intent else ""
             scope = " — ".join(part for part in (indicator, country) if part) or "this series"
             message = _um_get(
                 "no_observations_in_window",
-                getattr(intent, "language", None),
+                language,
                 scope=scope,
-                latest=match.group(1)[:10],
+                latest=latest,
             )
             error = "no_data_in_requested_window"
         return QueryResponse(
@@ -4185,6 +4236,7 @@ class QueryService:
             message=message,
             error=error,
             processingSteps=tracker.to_list(),
+            windowCoverage=coverage,
         )
 
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):
@@ -4621,12 +4673,26 @@ class QueryService:
         a matching sub-geography, detected structurally by
         :meth:`_served_data_references_region` — replace the response with an
         explicit explanation rather than returning national data silently
-        mislabeled as the region. Exempts the providers whose own mechanisms
-        serve genuine subnational data (StatsCan+CA, FRED+US). Idempotent and
-        never raises: a response already carrying an error/clarification, empty
+        mislabeled as the region. No provider is exempt (``_SUBNATIONAL_EXEMPT``
+        is empty by design): genuine FRED-state / StatsCan-province results
+        pass because their served metadata names the region.
+
+        A ``no_data_in_requested_window`` response is also checked when it
+        carries FETCHED series metadata (``windowCoverage``): a window miss on
+        a series that does not reference the region must not tell the user
+        "this region's series ends at X". See
+        :meth:`_enforce_subnational_on_window_miss`.
+
+        Idempotent and never raises: any other error, a clarification, empty
         data, or no region annotation passes through untouched.
         """
         try:
+            if (
+                response is not None
+                and not response.data
+                and getattr(response, "error", None) == "no_data_in_requested_window"
+            ):
+                return self._enforce_subnational_on_window_miss(response)
             if response is None or not response.data:
                 return response
             if response.error or response.clarificationNeeded:
@@ -4671,6 +4737,51 @@ class QueryService:
             response.message = message
         except Exception as exc:  # never let enforcement break a response
             logger.debug("Subnational fail-closed enforcement skipped: %s", exc)
+        return response
+
+    def _enforce_subnational_on_window_miss(self, response: QueryResponse) -> QueryResponse:
+        """Subnational check for a window-miss response, on FETCHED metadata only.
+
+        Runs the same structural region-reference predicate as the served-data
+        path over the metadata of the series the provider actually returned
+        (``response.windowCoverage.series_metadata`` — probe or pre-window
+        payload). Without that fetched evidence the response is left alone:
+        catalog titles / intent code strings are never evaluated (a StatsCan
+        "by province" table title or FRED's ``TXUR`` would falsely fail).
+        The converted response keeps ``data=None``, so the one-shot
+        re-adjudication in :meth:`process_query` (keyed on a served code)
+        does not fire, and its error code no longer matches — idempotent.
+        """
+        try:
+            intent = response.intent
+            region = str(getattr(intent, "subnationalRegion", None) or "").strip() if intent else ""
+            coverage = getattr(response, "windowCoverage", None)
+            fetched = tuple(getattr(coverage, "series_metadata", ()) or ())
+            if not region or not fetched:
+                return response
+            from types import SimpleNamespace as _NS
+
+            if self._served_data_references_region([_NS(metadata=m) for m in fetched], region):
+                return response  # the region's own series — keep the window message
+            provider = str(getattr(coverage, "provider", "") or intent.apiProvider or "the provider")
+            pick = coverage.single_series() if hasattr(coverage, "single_series") else None
+            national = self._series_display_label(pick or fetched[0]) or "the selected series"
+            message = _localized_message(
+                "subnational_series_not_found",
+                getattr(intent, "language", None),
+                region=region,
+                provider=provider,
+                national=national,
+            ) or (
+                f"⚠️ **No {region}-level series found**\n\nNo **{region}**-level "
+                f"series for this indicator was found at **{provider}**. The "
+                f"closest match, {national}, does not refer to {region}."
+            )
+            response.data = None
+            response.error = "subnational_data_unavailable"
+            response.message = message
+        except Exception as exc:  # never let enforcement break a response
+            logger.debug("Subnational window-miss enforcement skipped: %s", exc)
         return response
 
     async def process_query(
@@ -6215,7 +6326,7 @@ class QueryService:
                         # the marker carries the date; else the finalizer
                         # stamps its generic scope-aware explanation.
                         return self._render_window_marker_response(
-                            conv_id, intent, tracker, str(fallback_exc)
+                            conv_id, intent, tracker, fallback_exc
                         )
 
             # Last resort: serve stale (expired) cached data rather than returning nothing.
@@ -6305,7 +6416,7 @@ class QueryService:
                     if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
                         # See sibling branch above.
                         return self._render_window_marker_response(
-                            conv_id, intent, tracker, str(fallback_exc)
+                            conv_id, intent, tracker, fallback_exc
                         )
 
             # Provider-change follow-up: give explicit message about unavailability
