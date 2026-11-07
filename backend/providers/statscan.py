@@ -1460,42 +1460,62 @@ class StatsCanProvider(BaseProvider):
         Returns:
             Tuple of (converted_value, unit_label)
         """
+        # The label is a property of the SERIES (scalar code + target unit +
+        # name), never of one point's value. Computing it before the None check
+        # keeps a null observation from reporting the SOURCE scale ("millions")
+        # for a series whose other points were already divided into billions.
+        unit_label = self._normalized_unit_label(from_scalar_code, to_unit, indicator_name)
         if value is None:
-            return None, self._get_unit_description(indicator_name or "", from_scalar_code)
+            return None, unit_label
 
-        # Define conversion factors - these match the scalar factor codes
-        scale_factors = {
-            "units": 1,
-            "tens": 10,
-            "hundreds": 100,
-            "thousands": 1_000,
-            "ten thousands": 10_000,
-            "hundred thousands": 100_000,
-            "millions": 1_000_000,
-            "ten millions": 10_000_000,
-            "hundred millions": 100_000_000,
-            "billions": 1_000_000_000,
-        }
-
-        # Get source unit from scalar code
-        source_unit = self._map_scalar_factor(from_scalar_code)
-        if not source_unit or source_unit not in scale_factors:
+        factors = self._scale_factor_pair(from_scalar_code, to_unit)
+        if factors is None:
             # Unknown scalar code, return as-is
-            return value, self._get_unit_description(indicator_name or "", from_scalar_code)
-
-        source_factor = scale_factors[source_unit]
-        target_factor = scale_factors.get(to_unit, source_factor)
+            return value, unit_label
+        source_factor, target_factor = factors
 
         # Convert: value * source_factor / target_factor
         # Example: 2,287,214 millions → billions
         #          2,287,214 * 1,000,000 / 1,000,000,000 = 2,287.214
         if source_factor != target_factor:
-            converted_value = value * source_factor / target_factor
-            return converted_value, to_unit
-        else:
-            # Source and target are same, use context-aware unit description
-            final_unit = self._get_unit_description(indicator_name or "", from_scalar_code)
-            return value, final_unit
+            return value * source_factor / target_factor, unit_label
+        return value, unit_label
+
+    # Conversion factors - these match the scalar factor codes
+    _SCALE_FACTORS = {
+        "units": 1,
+        "tens": 10,
+        "hundreds": 100,
+        "thousands": 1_000,
+        "ten thousands": 10_000,
+        "hundred thousands": 100_000,
+        "millions": 1_000_000,
+        "ten millions": 10_000_000,
+        "hundred millions": 100_000_000,
+        "billions": 1_000_000_000,
+    }
+
+    def _scale_factor_pair(self, from_scalar_code: int, to_unit: str) -> Optional[tuple[int, int]]:
+        """(source_factor, target_factor) for a scalar code, or None if unknown."""
+        source_unit = self._map_scalar_factor(from_scalar_code)
+        if not source_unit or source_unit not in self._SCALE_FACTORS:
+            return None
+        source_factor = self._SCALE_FACTORS[source_unit]
+        return source_factor, self._SCALE_FACTORS.get(to_unit, source_factor)
+
+    def _normalized_unit_label(
+        self, from_scalar_code: int, to_unit: str = "billions", indicator_name: Optional[str] = None
+    ) -> str:
+        """Unit label of a series normalized from ``from_scalar_code`` to ``to_unit``.
+
+        A pure function of (scalar code, target unit, indicator name): the
+        target unit when a conversion happens, otherwise the context-aware
+        description of the source scale (same-unit and unknown-code cases).
+        """
+        factors = self._scale_factor_pair(from_scalar_code, to_unit)
+        if factors is not None and factors[0] != factors[1]:
+            return to_unit
+        return self._get_unit_description(indicator_name or "", from_scalar_code)
 
     def _extract_detailed_metadata(
         self,
@@ -2157,9 +2177,13 @@ class StatsCanProvider(BaseProvider):
                 None,
             )
         data_points = []
-        final_unit: Optional[str] = "billions"
+        # One label for the whole series (see _normalized_unit_label): a null
+        # point must not relabel already-converted values.
+        final_unit: Optional[str] = self._normalized_unit_label(
+            scalar_code, "billions", indicator_name
+        )
         for point in vector_data:
-            converted_value, final_unit = self._normalize_units(
+            converted_value, _point_unit = self._normalize_units(
                 point["value"],
                 scalar_code,
                 to_unit="billions",
@@ -2251,8 +2275,10 @@ class StatsCanProvider(BaseProvider):
             # Convert data points to billions
             data_points = []
             target_unit = "billions"
+            # One label for the whole series (see _normalized_unit_label).
+            unit = self._normalized_unit_label(scalar_code, target_unit, indicator_name)
             for point in vector_data:
-                converted_value, final_unit = self._normalize_units(
+                converted_value, _point_unit = self._normalize_units(
                     point["value"],
                     scalar_code,
                     to_unit=target_unit,
@@ -2262,7 +2288,6 @@ class StatsCanProvider(BaseProvider):
                     "date": point["refPer"],
                     "value": converted_value,
                 })
-            unit = final_unit
         else:
             # Keep original units (for percentages, indices, counts, etc.)
             unit = self._get_unit_description(indicator_name, scalar_code)
