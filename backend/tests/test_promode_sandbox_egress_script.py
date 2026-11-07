@@ -3,8 +3,9 @@
 Runs the script's real purge/install functions (extracted verbatim) against a
 stateful fake netfilter command, so the mechanism is exercised without root:
 re-runs and pre-existing hand-added tagged rules never duplicate, untagged
-rules are untouched, IPv6 gets the same uid-scoped allowlist as IPv4, and the
-IPv6 step is skipped (not fatal) when ip6tables is unusable.
+rules are untouched, IPv6 gets the same uid-scoped allowlist as IPv4, a long
+chain listing cannot end the purge early, and a family whose netfilter tool is
+missing or unusable is skipped with a warning instead of aborting.
 """
 
 import subprocess
@@ -36,16 +37,23 @@ fake_ipt() {
 def _functions() -> str:
     text = SCRIPT.read_text()
     out = []
-    for name in ("purge_tagged_rules", "install_egress_allowlist"):
+    for name in ("purge_tagged_rules", "install_egress_allowlist", "provision_family"):
         start = text.index(f"{name}() {{")
         end = text.index("\n}\n", start) + 3
         out.append(text[start:end])
     return "\n".join(out)
 
 
-def _run(state: Path, *calls: str) -> list:
+def _run_raw(state: Path, *calls: str) -> subprocess.CompletedProcess:
     script = HARNESS + _functions() + "\n" + "\n".join(calls) + "\n"
-    subprocess.run(["bash", "-c", script, "harness", str(state)], check=True, timeout=30)
+    return subprocess.run(
+        ["bash", "-c", script, "harness", str(state)],
+        check=True, timeout=60, capture_output=True, text=True,
+    )
+
+
+def _run(state: Path, *calls: str) -> list:
+    _run_raw(state, *calls)
     return [l for l in state.read_text().splitlines() if l]
 
 
@@ -94,8 +102,55 @@ def test_rerun_and_hand_added_rules_never_duplicate(tmp_path, extra):
     assert "-A OUTPUT -p tcp --dport 22 -j ACCEPT" in final
 
 
-def test_ipv6_step_is_guarded_and_non_fatal():
-    text = SCRIPT.read_text()
-    assert "command -v ip6tables >/dev/null 2>&1 && ip6tables -S OUTPUT >/dev/null 2>&1" in text
-    assert "install_egress_allowlist ip6tables" in text
-    assert "ip6tables unavailable; IPv6 egress allowlist NOT applied" in text
+def test_purge_survives_listing_larger_than_a_pipe_buffer(tmp_path):
+    """Tagged rules listed FIRST in a chain listing far larger than a pipe
+    buffer: an early-exit reader in a pipefail pipe would SIGPIPE the lister
+    and end the purge early, leaving stale copies to be duplicated."""
+    state = tmp_path / "big"
+    tagged = _tagged(_run(state, "install_egress_allowlist fake_ipt"))
+    filler = [f"-A OUTPUT -p tcp --dport {1024 + i} -j ACCEPT -m comment --comment filler-{i}"
+              for i in range(3000)]
+    state.write_text("\n".join(tagged + filler) + "\n")
+    assert len(state.read_bytes()) > 2 * 65536
+
+    final = _run(state, "install_egress_allowlist fake_ipt")
+
+    assert _tagged(final) == tagged
+    assert [r for r in final if "filler-" in r] == filler
+
+
+@pytest.mark.parametrize("probe", ["missing", "broken"])
+def test_unusable_family_is_skipped_with_warning_not_fatal(tmp_path, probe):
+    """A missing binary, or one whose `-S OUTPUT` probe fails (no netfilter
+    for that family), warns and returns success without touching rules."""
+    state = tmp_path / "rules"
+    state.write_text("-A OUTPUT -p tcp --dport 22 -j ACCEPT\n")
+    calls = []
+    if probe == "missing":
+        tool = "promode_no_such_ip6tables_binary"
+    else:
+        calls.append("broken_ipt() { [ \"$1\" = -S ] && return 3; fake_ipt \"$@\"; }")
+        tool = "broken_ipt"
+    calls.append(f"provision_family {tool} IPv6")
+    calls.append("echo provision-continued")
+
+    proc = _run_raw(state, *calls)
+
+    assert "provision-continued" in proc.stdout
+    assert f"WARNING: {tool} unavailable; IPv6 egress allowlist NOT applied" in proc.stderr
+    assert state.read_text() == "-A OUTPUT -p tcp --dport 22 -j ACCEPT\n"
+
+
+def test_usable_family_is_provisioned(tmp_path):
+    state = tmp_path / "rules"
+    state.write_text("")
+    proc = _run_raw(state, "provision_family fake_ipt IPv6")
+    assert len(_tagged(state.read_text().splitlines())) == 5
+    assert "fake_ipt egress allowlist installed for uid 996" in proc.stdout
+
+
+def test_script_provisions_both_families():
+    """Top-level wiring: IPv4 (with the metadata REJECT) and the IPv6 mirror."""
+    lines = [l.strip() for l in SCRIPT.read_text().splitlines()]
+    assert "provision_family iptables IPv4 169.254.169.254/32" in lines
+    assert "provision_family ip6tables IPv6" in lines

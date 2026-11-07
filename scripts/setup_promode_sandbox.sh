@@ -82,8 +82,12 @@ gpasswd -d "$PROMODE_USER" sudo 2>/dev/null || true
 #    NOTE: the per-exec output dir is created by the backend (hanlulong) under
 #    SESSION_DIR/work; we set the group + setgid on the parents so children
 #    inherit the group. The jail runs as promode and writes files there; they
-#    inherit group=promode-share and (with umask) are group-writable, so
-#    hanlulong (also in the group) can shutil.move them.
+#    inherit group=promode-share. The backend PUBLISHES them by COPYING the
+#    bytes into a new file it creates (it never moves/chmods a path the jail
+#    controls), so hanlulong (also in the group) needs READ access to them:
+#    that relies on the jail's umask (inherited through sudo from the backend
+#    unit's UMask=0022) leaving promode's files group-readable. A journal
+#    warning "promode_output_rejected ... reason=open_refused" means it broke.
 # ---------------------------------------------------------------------------
 for d in "$PUBLIC_DIR" "$SESSION_DIR" "$SESSION_DIR/work"; do
     mkdir -p "$d"
@@ -129,10 +133,19 @@ PUID="$(id -u "$PROMODE_USER")"
 # (idempotency — also clears identical rules that were added by hand). -S
 # prints the comment WITHOUT quotes, so we match the bare tag. We round-trip
 # each matching -A line into a -D delete until none remain (loop-guarded).
+# The listing is captured into a variable and scanned in-shell: no early-exit
+# reader (grep -q / head) in a pipe, which under `set -o pipefail` could end
+# the loop on SIGPIPE once the chain listing outgrows a pipe buffer.
 purge_tagged_rules() {
-    local ipt="$1" line _guard=0
-    while "$ipt" -S OUTPUT 2>/dev/null | grep -q -- "--comment $TAG"; do
-        line="$("$ipt" -S OUTPUT | grep -- "--comment $TAG" | head -1 | sed 's/^-A/-D/')"
+    local ipt="$1" rules rule line _guard=0
+    while rules="$("$ipt" -S OUTPUT 2>/dev/null)"; do
+        line=""
+        while IFS= read -r rule; do
+            case "$rule" in
+                "-A "*"--comment $TAG"*) line="-D${rule#-A}"; break ;;
+            esac
+        done <<< "$rules"
+        [ -n "$line" ] || break
         # shellcheck disable=SC2086
         "$ipt" $line 2>/dev/null || break
         _guard=$((_guard + 1))
@@ -169,25 +182,27 @@ install_egress_allowlist() {
     add -j REJECT
 }
 
-if command -v iptables >/dev/null 2>&1; then
-    # IPv4 also blocks the cloud metadata service.
-    install_egress_allowlist iptables 169.254.169.254/32
-    echo "[promode-setup] iptables egress allowlist installed for uid $PUID"
-else
-    echo "[promode-setup] WARNING: iptables not found; IPv4 egress allowlist NOT applied." >&2
-    echo "[promode-setup] Layer-1 mount isolation still hides all secrets; SSRF to loopback remains possible." >&2
-fi
+# Apply the allowlist for one family when its netfilter tool is usable, else
+# warn and continue: a host without the tool, or a kernel without that
+# family's netfilter (the -S probe fails), must not abort the whole provision.
+# Args: <netfilter binary> <family label> [extra REJECT destinations...]
+provision_family() {
+    local ipt="$1" family="$2"; shift 2
+    if command -v "$ipt" >/dev/null 2>&1 && "$ipt" -S OUTPUT >/dev/null 2>&1; then
+        install_egress_allowlist "$ipt" "$@"
+        echo "[promode-setup] $ipt egress allowlist installed for uid $PUID"
+    else
+        echo "[promode-setup] WARNING: $ipt unavailable; $family egress allowlist NOT applied." >&2
+        echo "[promode-setup] Layer-1 mount isolation still hides all secrets; $family SSRF to loopback remains possible." >&2
+    fi
+    return 0
+}
 
+# IPv4 also blocks the cloud metadata service.
+provision_family iptables IPv4 169.254.169.254/32
 # IPv6 mirror. Without it a host with IPv6 connectivity leaves promode's v6
 # egress (including ::1 loopback) completely open, bypassing the v4 allowlist.
-# Skip with a warning when ip6tables is absent or the kernel has no IPv6
-# netfilter (the -S probe fails), rather than aborting the whole provision.
-if command -v ip6tables >/dev/null 2>&1 && ip6tables -S OUTPUT >/dev/null 2>&1; then
-    install_egress_allowlist ip6tables
-    echo "[promode-setup] ip6tables egress allowlist installed for uid $PUID"
-else
-    echo "[promode-setup] WARNING: ip6tables unavailable; IPv6 egress allowlist NOT applied." >&2
-fi
+provision_family ip6tables IPv6
 echo "[promode-setup] NOTE: persist across reboot via netfilter-persistent/iptables-save or systemd ExecStartPre."
 
 echo "[promode-setup] DONE. Pro Mode jail will now run as '$PROMODE_USER' (executor auto-detects the sudoers marker)."
