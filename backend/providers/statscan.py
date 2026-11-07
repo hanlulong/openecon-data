@@ -11,6 +11,10 @@ import zipfile
 import httpx
 
 from ..config import get_settings
+from ..utils.catalog_metadata_signals import (
+    statscan_canonical_frequency_by_code,
+    statscan_frequency_code_for,
+)
 from ..services.statscan_http import get_statscan_http_client
 from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
@@ -20,6 +24,9 @@ from ..services.rate_limiter import record_provider_success
 from .base import BaseProvider, admit_provider_request, record_rate_limited_response
 
 logger = logging.getLogger(__name__)
+
+# The frequency vocabulary StatsCan NormalizedData.metadata.frequency emits.
+_PROVIDER_EMITTED_FREQUENCIES = frozenset({"daily", "weekly", "monthly", "quarterly", "annual"})
 
 _DIMENSION_MEMBER_VALUE_ALIASES: Dict[str, List[str]] = {
     # Mechanical normalization after a StatsCan product/table is already
@@ -108,12 +115,17 @@ class StatsCanProvider(BaseProvider):
         # Note: Provincial GDP queries should use metadata search to discover product 36100402 (Real GDP by province)
     }
 
+    # Derived from the OFFICIAL WDS getCodeSets frequency codeset (committed
+    # copy, backend/data/metadata/reference/statscan_frequency_codeset.json),
+    # never hand-typed: the old literal mapped weekly to code 3, which does
+    # not exist (weekly is 2). The emitted vocabulary stays the core tokens
+    # downstream TTL / period formatting / conversation deltas expect; other
+    # official frequencies (biweekly, semi-annual, every-N-years, occasional)
+    # keep reporting "unknown" as before.
     FREQUENCY_MAP: Dict[int, str] = {
-        1: "daily",
-        3: "weekly",
-        6: "monthly",
-        9: "quarterly",
-        12: "annual",
+        code: token
+        for code, token in statscan_canonical_frequency_by_code().items()
+        if token in _PROVIDER_EMITTED_FREQUENCIES
     }
 
     SCALAR_FACTOR_MAP: Dict[int, str] = {
@@ -2851,15 +2863,18 @@ class StatsCanProvider(BaseProvider):
     @staticmethod
     def _frequency_code_from_text(frequency: str) -> int:
         frequency_lower = str(frequency or "").lower()
-        if "daily" in frequency_lower:
-            return 1
-        if "week" in frequency_lower:
-            return 3
-        if "month" in frequency_lower:
-            return 6
-        if "quarter" in frequency_lower:
-            return 9
-        return 12
+        # Codes come from the official codeset (weekly is 2, not 3).
+        for marker, canonical in (
+            ("daily", "daily"),
+            ("week", "weekly"),
+            ("month", "monthly"),
+            ("quarter", "quarterly"),
+        ):
+            if marker in frequency_lower:
+                code = statscan_frequency_code_for(canonical)
+                if code is not None:
+                    return code
+        return statscan_frequency_code_for("annual") or 12
 
     async def _download_full_table_csv_bundle(
         self,

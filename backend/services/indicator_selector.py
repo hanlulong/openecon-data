@@ -23,6 +23,11 @@ import httpx
 
 from ..config import Settings
 from ..routing.country_resolver import CountryResolver
+from ..utils.catalog_metadata_signals import (
+    canonical_catalog_frequency,
+    catalog_row_is_vintage_archive,
+    provider_has_vintage_source_reference,
+)
 from ..utils.providers import normalize_provider_name
 
 
@@ -661,6 +666,9 @@ class IndicatorSelector:
             **_english_kw, **_retrieval_constraint_kw,
         )
         candidates, scores = _drop_excluded(candidates, scores)
+        candidates, scores = await self._drop_vintage_archive_candidates(
+            query, candidates, scores, provider
+        )
 
         if not candidates:
             return SelectionResult(code=None, source="no_candidates")
@@ -736,6 +744,9 @@ class IndicatorSelector:
                     self._get_candidates_with_scores, retry_query, provider
                 )
                 retry_candidates, retry_scores = _drop_excluded(retry_candidates, retry_scores)
+                retry_candidates, retry_scores = await self._drop_vintage_archive_candidates(
+                    query, retry_candidates, retry_scores, provider
+                )
                 retry_has_country_match = False
                 if retry_candidates and country:
                     retry_candidates, retry_scores, retry_conflict, retry_has_country_match = self._apply_country_constraint(
@@ -1172,6 +1183,64 @@ class IndicatorSelector:
             "STATSCAN": "StatsCan",
         }.get(canonical, provider)
 
+    async def _drop_vintage_archive_candidates(
+        self,
+        query: str,
+        candidates: List[tuple[str, str]],
+        scores: List[float],
+        provider: str,
+    ) -> tuple[List[tuple[str, str]], List[float]]:
+        """Drop candidates from vintage-archive sources when servable ones remain.
+
+        STRUCTURAL: keyed on the catalog row's source dimension list (a source
+        that publishes a release-``Version`` dimension cannot serve current
+        data -- the fetch answers "indicator not found / archived"), never on
+        a code, title or concept.  Guards:
+          * an archive-only candidate set is kept intact (annotated in the
+            prompt) so the adjudicator can still REJECT and fallback runs;
+          * a code the user typed literally is never dropped (an explicit
+            request wins).
+        A no-op for providers without a source-dimension reference.
+        """
+        if not candidates or not provider_has_vintage_source_reference(provider):
+            return candidates, scores
+        try:
+            enriched = await asyncio.to_thread(self._enrich_candidates, candidates, provider)
+        except Exception as exc:  # fail open: never let a metadata read break selection
+            logger.debug("Vintage-archive candidate filter skipped: %s", exc)
+            return candidates, scores
+        archived = {
+            str(item.get("code") or "")
+            for item in enriched
+            if isinstance(item, dict) and item.get("vintage_archive")
+        }
+        if not archived:
+            return candidates, scores
+        query_text = str(query or "")
+
+        def _named_in_query(code: str) -> bool:
+            return bool(code) and re.search(
+                rf"(?<![A-Za-z0-9.]){re.escape(code)}(?![A-Za-z0-9.])",
+                query_text,
+                flags=re.IGNORECASE,
+            ) is not None
+
+        kept = [
+            (cand, score)
+            for cand, score in zip(candidates, scores)
+            if str(cand[0]) not in archived or _named_in_query(str(cand[0]))
+        ]
+        if not any(str(cand[0]) not in archived for cand, _score in kept):
+            return candidates, scores
+        if len(kept) < len(candidates):
+            logger.info(
+                "🗄️ Dropped %d vintage-archive %s candidate(s) for '%s' (servable candidates remain)",
+                len(candidates) - len(kept),
+                provider,
+                query_text[:80],
+            )
+        return [cand for cand, _score in kept], [score for _cand, score in kept]
+
     def _prioritize_candidates_by_query_metadata(
         self,
         query: str,
@@ -1487,20 +1556,26 @@ class IndicatorSelector:
             codes = [c[0] for c in candidates]
             # Build a lookup map: (provider, code) -> metadata row
             placeholders = ",".join(["?"] * len(codes))
+            catalog_provider = self._catalog_provider_name(provider)
             cur.execute(
-                f"SELECT code, frequency, unit, end_date, category, description, keywords, popularity FROM indicators "
+                f"SELECT code, frequency, unit, end_date, category, description, keywords, popularity, raw_metadata FROM indicators "
                 f"WHERE provider = ? COLLATE NOCASE AND code IN ({placeholders})",
-                [self._catalog_provider_name(provider)] + codes,
+                [catalog_provider] + codes,
             )
             for row in cur.fetchall():
                 meta_map[row["code"]] = {
-                    "frequency": row["frequency"] or "",
+                    # Raw official provider codes (StatsCan "6"/"12") decoded
+                    # to the canonical vocabulary every frequency check speaks.
+                    "frequency": canonical_catalog_frequency(catalog_provider, row["frequency"]) or "",
                     "unit": row["unit"] or "",
                     "end_date": row["end_date"] or "",
                     "category": row["category"] or "",
                     "description": row["description"] or "",
                     "keywords": row["keywords"] or "",
                     "popularity": row["popularity"] or 0,
+                    "vintage_archive": catalog_row_is_vintage_archive(
+                        catalog_provider, row["raw_metadata"]
+                    ),
                 }
         except Exception as e:
             logger.warning("Failed to enrich candidates from DB: %s", e)
@@ -1540,6 +1615,7 @@ class IndicatorSelector:
                 "keywords": meta.get("keywords", ""),
                 "popularity": meta.get("popularity", 0),
                 "discontinued": discontinued,
+                "vintage_archive": bool(meta.get("vintage_archive", False)),
             })
 
         return enriched
@@ -1643,6 +1719,10 @@ class IndicatorSelector:
                 meta_parts.append("MOST-USED series for this concept")
             if item["discontinued"]:
                 meta_parts.append("DISCONTINUED")
+            if item.get("vintage_archive"):
+                # Structural source signal (the source publishes a vintage
+                # dimension): the current-data endpoint cannot serve it.
+                meta_parts.append("ARCHIVED vintage source: not servable for current data")
             if meta_parts:
                 parts.append(f"  ({', '.join(meta_parts)})")
             if coverage:

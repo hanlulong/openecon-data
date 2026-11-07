@@ -9086,11 +9086,19 @@ class QueryServiceTests(unittest.TestCase):
             }
             return mapping.get(str(provider or "").upper(), ([], []))
 
+        # This test's subject is the country-coverage filter. The stub WB code
+        # happens to be a vintage-archive catalog row, which the (orthogonal)
+        # option-supportability chokepoint would drop as unservable, so that
+        # predicate is neutralized here; it is covered in
+        # test_catalog_metadata_signals.py.
         with patch(
             "backend.services.indicator_selector.IndicatorSelector._get_candidates_with_scores",
             autospec=True,
             side_effect=_candidate_search,
-        ), patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK", "FRED"]):
+        ), patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK", "FRED"]), patch(
+            "backend.services.indicator_clarification.option_supportability_reason",
+            return_value=None,
+        ):
             options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
                 query=intent.originalQuery,
                 intent=intent,

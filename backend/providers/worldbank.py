@@ -11,6 +11,7 @@ import httpx
 
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
+from ..utils.catalog_metadata_signals import catalog_row_is_vintage_archive
 from ..utils.retry import DataNotAvailableError
 from ..services.http_pool import get_http1_client, effective_timeout
 from .base import BaseProvider
@@ -555,26 +556,43 @@ class WorldBankProvider(BaseProvider):
             if primary_title and primary_title != indicator:
                 add_rows(db.search(primary_title, provider="WorldBank", limit=raw_limit))
 
+            # Servability first: a vintage-archive source (its published
+            # dimension list carries a release Version) cannot be served by
+            # the current-data endpoint, so retrying an archived primary into
+            # its archive siblings fails the same way and burns the fetch
+            # budget. One shared structural predicate (catalog source
+            # dimensions) -- the same one the selector and clarification menus
+            # use; never a source-name substring or a source id literal.
+            def is_vintage_archive(row: dict[str, Any]) -> bool:
+                return catalog_row_is_vintage_archive("WorldBank", row.get("raw_metadata"))
+
+            if any(not is_vintage_archive(row) for row in candidates):
+                candidates = [row for row in candidates if not is_vintage_archive(row)]
+            elif primary_row and is_vintage_archive(primary_row):
+                # Archived primary with only archived siblings: they fail the
+                # same way, so offer none and let cross-provider fallback run.
+                return []
+
             def candidate_rank(row: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
                 code = str(row.get("code") or "")
                 name_norm = self._normalize_indicator_title(str(row.get("name") or ""))
                 source_id, source_name = self._indicator_row_source(row)
                 source_name_lower = source_name.lower()
 
+                servable_source = int(not is_vintage_archive(row))
                 exact_primary_title = int(bool(primary_title_norm and name_norm == primary_title_norm))
                 exact_requested_title = int(bool(requested_title_norm and name_norm == requested_title_norm))
                 generic_wdi_source = int(
                     source_id == "2" or source_name_lower == "world development indicators"
                 )
-                non_archive_source = int("archive" not in source_name_lower)
                 dotted_provider_code = int("." in code)
                 # Negative order preserves upstream rank when provider-native
                 # evidence is otherwise tied.
                 return (
+                    servable_source,
                     exact_primary_title,
                     exact_requested_title,
                     generic_wdi_source,
-                    non_archive_source,
                     dotted_provider_code,
                     -int(row.get("_alternative_order") or 0),
                 )

@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
+from ..utils.catalog_metadata_signals import normalize_catalog_row_frequency
+
 logger = logging.getLogger(__name__)
 
 # Database path
@@ -44,6 +46,18 @@ DB_PATH = Path(__file__).parent.parent / "data" / "indicators.db"
 # the SOURCE's lifecycle semantics ("archive"/"discontinued"), plus the World
 # Bank's own discontinued "Doing Business" database.
 _WB_ARCHIVAL_SOURCE_MARKERS = ("archive", "discontinued", "doing business")
+
+
+def _catalog_row(row: Any) -> Dict[str, Any]:
+    """Materialize a catalog row with structural metadata decoded.
+
+    Every row the catalog hands out passes through here, so selection,
+    exact-title resolution and menus all see the same canonical frequency
+    (StatsCan's raw official ``frequencyCode`` -> ``monthly``/``annual``/...;
+    the raw code is kept as ``frequency_code``). Non-coded values -- every
+    non-StatsCan provider today -- pass through byte-identical.
+    """
+    return normalize_catalog_row_frequency(dict(row))
 
 
 def _word_in(word: str, text: str) -> bool:
@@ -492,7 +506,7 @@ class IndicatorDatabase:
             cursor.execute(sql, params)
             results = []
             for row in cursor.fetchall():
-                results.append(dict(row))
+                results.append(_catalog_row(row))
             return self._apply_antonym_filter(results, words, limit)
         except Exception:
             # Swallowing the error keeps retrieval degradation graceful
@@ -514,7 +528,7 @@ class IndicatorDatabase:
             (provider, code)
         )
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return _catalog_row(row) if row else None
 
     def get_provider_stats(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics for all providers."""
@@ -754,7 +768,7 @@ class IndicatorLookup:
         raw_params.append(max(1, limit))
         cursor.execute(raw_sql, raw_params)
         for row in cursor.fetchall():
-            candidate = dict(row)
+            candidate = _catalog_row(row)
             identity = _row_identity(candidate)
             if identity in raw_seen:
                 continue
@@ -785,7 +799,7 @@ class IndicatorLookup:
                 (normalized_provider,),
             )
             for row in cursor.fetchall():
-                candidate = dict(row)
+                candidate = _catalog_row(row)
                 identity = _row_identity(candidate)
                 if identity in raw_seen:
                     continue
@@ -812,7 +826,7 @@ class IndicatorLookup:
         params.append(max(1, limit))
 
         cursor.execute(sql, params)
-        exact_rows = [dict(row) for row in cursor.fetchall()]
+        exact_rows = [_catalog_row(row) for row in cursor.fetchall()]
         if len(exact_rows) >= limit:
             return exact_rows[:limit]
 
@@ -847,7 +861,7 @@ class IndicatorLookup:
         seen_codes = {str(row.get("code") or "") for row in exact_rows}
         normalized_rows: list[tuple[int, int, str, Dict[str, Any]]] = []
         for row in cursor.fetchall():
-            candidate = dict(row)
+            candidate = _catalog_row(row)
             code = str(candidate.get("code") or "")
             if code in seen_codes:
                 continue
@@ -889,7 +903,7 @@ class IndicatorLookup:
                 cursor.execute(token_sql, token_params)
                 query_token_set = set(query_tokens)
                 for row in cursor.fetchall():
-                    candidate = dict(row)
+                    candidate = _catalog_row(row)
                     code = str(candidate.get("code") or "")
                     if code in seen_codes:
                         continue

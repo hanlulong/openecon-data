@@ -1,0 +1,92 @@
+{
+  "source_url": "https://www150.statcan.gc.ca/t1/wds/rest/getCodeSets",
+  "codeset": "frequency",
+  "retrieved_at": "2026-11-07T15:44:49Z",
+  "frequency": [
+    {
+      "frequencyCode": 1,
+      "frequencyDescEn": "Daily",
+      "frequencyDescFr": "Quotidienne"
+    },
+    {
+      "frequencyCode": 2,
+      "frequencyDescEn": "Weekly",
+      "frequencyDescFr": "Hebdomadaire"
+    },
+    {
+      "frequencyCode": 4,
+      "frequencyDescEn": "Biweekly",
+      "frequencyDescFr": "Aux 2 semaines"
+    },
+    {
+      "frequencyCode": 6,
+      "frequencyDescEn": "Monthly",
+      "frequencyDescFr": "Mensuelle"
+    },
+    {
+      "frequencyCode": 7,
+      "frequencyDescEn": "Bimonthly",
+      "frequencyDescFr": "Aux 2 mois"
+    },
+    {
+      "frequencyCode": 9,
+      "frequencyDescEn": "Quarterly",
+      "frequencyDescFr": "Trimestrielle"
+    },
+    {
+      "frequencyCode": 11,
+      "frequencyDescEn": "Semi-annual",
+      "frequencyDescFr": "Semestrielle"
+    },
+    {
+      "frequencyCode": 12,
+      "frequencyDescEn": "Annual",
+      "frequencyDescFr": "Annuelle"
+    },
+    {
+      "frequencyCode": 13,
+      "frequencyDescEn": "Every 2 years",
+      "frequencyDescFr": "Aux 2 ans"
+    },
+    {
+      "frequencyCode": 14,
+      "frequencyDescEn": "Every 3 years",
+      "frequencyDescFr": "Aux 3 ans"
+    },
+    {
+      "frequencyCode": 15,
+      "frequencyDescEn": "Every 4 years",
+      "frequencyDescFr": "Aux 4 ans"
+    },
+    {
+      "frequencyCode": 16,
+      "frequencyDescEn": "Every 5 years",
+      "frequencyDescFr": "Aux 5 ans"
+    },
+    {
+      "frequencyCode": 17,
+      "frequencyDescEn": "Every 10 years",
+      "frequencyDescFr": "Aux 10 ans"
+    },
+    {
+      "frequencyCode": 18,
+      "frequencyDescEn": "Occasional",
+      "frequencyDescFr": "Occasionnelle"
+    },
+    {
+      "frequencyCode": 19,
+      "frequencyDescEn": "Occasional Quarterly",
+      "frequencyDescFr": "Occasionnelle trimestrielle"
+    },
+    {
+      "frequencyCode": 20,
+      "frequencyDescEn": "Occasional Monthly",
+      "frequencyDescFr": "Occasionnelle mensuelle"
+    },
+    {
+      "frequencyCode": 21,
+      "frequencyDescEn": "Occasional Daily",
+      "frequencyDescFr": "Occasionnelle quotidienne"
+    }
+  ]
+}

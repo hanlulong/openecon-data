@@ -858,7 +858,10 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(alternatives[0], "NY.GDP.MKTP.KD.ZG")
         self.assertNotIn("6.0.GDP_growth", alternatives)
-        self.assertIn("NY.GDP.MKTP.KN.87.ZG", alternatives)
+        # A vintage-archive source row (its source publishes a release
+        # Version dimension) is unservable by the current-data endpoint, so it
+        # is excluded while servable alternatives exist.
+        self.assertNotIn("NY.GDP.MKTP.KN.87.ZG", alternatives)
 
     def test_worldbank_natural_label_no_data_tries_executable_alternative(self) -> None:
         provider = WorldBankProvider()

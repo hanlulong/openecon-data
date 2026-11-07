@@ -1,0 +1,505 @@
+{
+  "source_url": "https://api.worldbank.org/v2/sources/{source_id}/concepts?format=json",
+  "retrieved_at": "2026-11-07T15:45:13Z",
+  "sources": {
+    "1": {
+      "name": "Doing Business",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "2": {
+      "name": "World Development Indicators",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "5": {
+      "name": "Subnational Malnutrition Database",
+      "concepts": [
+        "Admin Region",
+        "Series",
+        "Time"
+      ]
+    },
+    "11": {
+      "name": "Africa Development Indicators",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "12": {
+      "name": "Education Statistics",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "13": {
+      "name": "Enterprise Surveys",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "14": {
+      "name": "Gender Statistics",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "15": {
+      "name": "Global Economic Monitor",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "16": {
+      "name": "Health Nutrition and Population Statistics",
+      "concepts": [
+        "Country",
+        "Series",
+        "Year"
+      ]
+    },
+    "18": {
+      "name": "IDA Results Measurement System",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "19": {
+      "name": "Millennium Development Goals",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "20": {
+      "name": "Quarterly Public Sector Debt",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "22": {
+      "name": "Quarterly External Debt Statistics SDDS",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "23": {
+      "name": "Quarterly External Debt Statistics GDDS",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "25": {
+      "name": "Jobs",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "27": {
+      "name": "Global Economic Prospects",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "28": {
+      "name": "Global Findex database",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "29": {
+      "name": "The Atlas of Social Protection: Indicators of Resilience and Equity",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "30": {
+      "name": "Exporter Dynamics Database – Indicators at Country-Year Level",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "32": {
+      "name": "Global Financial Development",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "33": {
+      "name": "G20 Financial Inclusion Indicators",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "34": {
+      "name": "Global Partnership for Education",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "35": {
+      "name": "Sustainable Energy for All",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "37": {
+      "name": "LAC Equity Lab",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "39": {
+      "name": "Health Nutrition and Population Statistics by Wealth Quintile",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "41": {
+      "name": "Country Partnership Strategy for India (FY2013 - 17)",
+      "concepts": [
+        "States",
+        "Series",
+        "Time"
+      ]
+    },
+    "43": {
+      "name": "Adjusted Net Savings",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "45": {
+      "name": "Indonesia Database for Policy and Economic Research",
+      "concepts": [
+        "Provinces",
+        "Series",
+        "Time"
+      ]
+    },
+    "46": {
+      "name": "Sustainable Development Goals",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "50": {
+      "name": "Subnational Population",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "54": {
+      "name": "Joint External Debt Hub",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "57": {
+      "name": "WDI Database Archives",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time",
+        "Version"
+      ]
+    },
+    "58": {
+      "name": "Universal Health Coverage",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "59": {
+      "name": "Wealth Accounts",
+      "concepts": [
+        "Country",
+        "Time",
+        "Series"
+      ]
+    },
+    "60": {
+      "name": "Economic Fitness",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "61": {
+      "name": "PPPs Regulatory Quality",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "63": {
+      "name": "Human Capital Index",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "64": {
+      "name": "Worldwide Bureaucracy Indicators",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "65": {
+      "name": "Health Equity and Financial Protection Indicators",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "66": {
+      "name": "Logistics Performance Index",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "67": {
+      "name": "PEFA 2011",
+      "concepts": [
+        "Country",
+        "Classification",
+        "Series",
+        "Time"
+      ]
+    },
+    "68": {
+      "name": "PEFA 2016",
+      "concepts": [
+        "Country",
+        "Classification",
+        "Series",
+        "Time"
+      ]
+    },
+    "69": {
+      "name": "Global Financial Inclusion and Consumer Protection Survey",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "70": {
+      "name": "Economic Fitness 2",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "71": {
+      "name": "International Comparison Program (ICP) 2005",
+      "concepts": [
+        "Classification",
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "73": {
+      "name": "Global Financial Inclusion and Consumer Protection Survey (Internal)",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "75": {
+      "name": "Environment, Social and Governance (ESG) Data",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "78": {
+      "name": "ICP 2017",
+      "concepts": [
+        "Classification",
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "79": {
+      "name": "PEFA_GRPFM",
+      "concepts": [
+        "Classification",
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "80": {
+      "name": "Gender Disaggregated Labor Database (GDLD)",
+      "concepts": [
+        "Country",
+        "Sector",
+        "Series",
+        "Time"
+      ]
+    },
+    "81": {
+      "name": "International Debt Statistics: DSSI",
+      "concepts": [
+        "Country",
+        "Counterpart-Area",
+        "Series",
+        "Time"
+      ]
+    },
+    "82": {
+      "name": "Global Public Procurement",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "83": {
+      "name": "Statistical Performance Indicators (SPI)",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "84": {
+      "name": "Education Policy",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "86": {
+      "name": "Global Jobs Indicators Database (JOIN)",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "87": {
+      "name": "Country Climate and Development Report (CCDR)",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "88": {
+      "name": "Food Prices for Nutrition",
+      "concepts": [
+        "Country",
+        "Classification",
+        "Series",
+        "Time"
+      ]
+    },
+    "89": {
+      "name": "Identification for Development (ID4D) Data",
+      "concepts": [
+        "Series",
+        "Time",
+        "Country"
+      ]
+    },
+    "91": {
+      "name": "PEFA_CRPFM",
+      "concepts": [
+        "Classification",
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "92": {
+      "name": "Disability Data Hub (DDH)",
+      "concepts": [
+        "Country",
+        "Series",
+        "Time"
+      ]
+    },
+    "93": {
+      "name": "FPN Datahub Archive",
+      "concepts": [
+        "Country",
+        "Classification",
+        "Series",
+        "Time"
+      ]
+    }
+  }
+}
