@@ -1664,8 +1664,13 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             if stripped_suffix and stripped_suffix not in seen:
                 queue.append(stripped_suffix)
 
+            # Token boundary after an ASCII alias so a provider name never
+            # strips the head of an ordinary word ("fred" in "Fredericksburg",
+            # "bis" in "Bismuth").  CJK aliases need none: the next ASCII
+            # token ("世界银行GDP") is already a boundary in Chinese text.
+            alias_boundary = "(?![a-z0-9])" if alias[-1:].isascii() and alias[-1:].isalnum() else ""
             stripped_prefix = re.sub(
-                rf"^\[?{re.escape(alias)}\]?\s*",
+                rf"^\[?{re.escape(alias)}{alias_boundary}\]?\s*",
                 "",
                 candidate,
                 flags=re.IGNORECASE,

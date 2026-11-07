@@ -57,7 +57,7 @@ from ..services.provider_strategy import (
 )
 from ..services.query_parsing import extract_indicator_text_from_refined_query
 from ..utils.option_supportability import option_supportability_reason
-from ..utils.providers import PROVIDER_SPECS, provider_option_labels
+from ..utils.providers import provider_display_specs, provider_option_labels
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -1541,8 +1541,9 @@ def _handle_data_sources_query(
 ) -> QueryResponse:
     """Answer questions about available data sources / providers."""
     # Derived from the ProviderSpec registry so the count and list cannot
-    # drift from the providers the system actually serves.
-    providers = [(spec.display_name, spec.description) for spec in PROVIDER_SPECS]
+    # drift from the providers the system actually serves.  Listed in the
+    # registry's display order (routing order is a separate concern).
+    providers = [(spec.display_name, spec.description) for spec in provider_display_specs()]
 
     lines = [
         f"I have access to **{len(providers)} data sources** covering economic, "

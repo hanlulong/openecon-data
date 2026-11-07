@@ -161,6 +161,33 @@ def test_loose_normalize_aliases_never_reach_user_text_tiers() -> None:
             assert loose not in explicit
 
 
+def test_title_wrapper_view_uses_only_user_text_tiers() -> None:
+    # exact_title_search_inputs strips these from USER text, so the lenient
+    # normalize-only tier must never leak in ("un" chopped "Unwrought" into
+    # "wrought"; "wb" chopped "WBL index").
+    for spec in PROVIDER_SPECS:
+        title_aliases = provider_title_aliases(spec.canonical) or []
+        allowed = set(spec.directive_aliases) | set(spec.title_wrapper_aliases)
+        assert set(title_aliases) == allowed, spec.canonical
+        normalize_only = set(spec.normalize_aliases) - allowed
+        assert normalize_only.isdisjoint(title_aliases), spec.canonical
+        for loose in ("un", "wb"):
+            assert loose not in title_aliases
+        # Title-wrapper extras are identity forms (inside the normalize tier)
+        # but are never explicit-request aliases.
+        for alias in spec.title_wrapper_aliases:
+            assert alias in spec.normalize_aliases
+            assert alias not in spec.bare_aliases and alias not in spec.directive_aliases
+
+
+def test_display_order_is_a_total_order_separate_from_routing_order() -> None:
+    from backend.utils.providers import provider_display_specs
+
+    orders = [spec.display_order for spec in PROVIDER_SPECS]
+    assert len(set(orders)) == len(orders)
+    assert set(provider_display_specs()) == set(PROVIDER_SPECS)
+
+
 def test_derived_identity_views_cover_every_registered_provider() -> None:
     from backend.services.indicator_clarification import _handle_data_sources_query
 
@@ -250,3 +277,4 @@ def test_country_extraction_keeps_country_outside_the_provider_name() -> None:
     # "GDP from Statistics Canada" (country left to the LLM parse).
     assert extract_countries_from_query("PMI from China Macro") == []
     assert extract_countries_from_query("GDP from Statistics Canada") == []
+

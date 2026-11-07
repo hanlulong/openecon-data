@@ -24,8 +24,14 @@ absolute top authority, so one over-broad alias hard-routes many queries):
 - ``directive_aliases``: count as an explicit request only after a source
   directive ("from", "using", "via", "according to", 来自, 使用 ...).  Names
   that are also ordinary language ("china macro") live here, never bare.
+- ``title_wrapper_aliases``: extra provider-name forms that may wrap a pasted
+  catalog title ("exchange rate Canadian Dollar") but are too generic to be a
+  free-text explicit request.  Only the exact-title variant generator reads
+  them; it uses ``directive_aliases`` + this tier, never ``normalize_aliases``.
 
 Registry ORDER is behavior: the bare tier is first-match in this order.
+Display order (the informational "which data sources" answer) is a separate
+per-spec ``display_order`` so presentation can never reorder routing.
 """
 
 from __future__ import annotations
@@ -49,9 +55,11 @@ class ProviderSpec:
     name: str  # router / indicators.db / option-label form: "WorldBank"
     display_name: str  # user-facing name: "World Bank"
     description: str  # one-line informational-answer copy
+    display_order: int  # position in the informational data-sources list
     normalize_aliases: Tuple[str, ...]
     bare_aliases: Tuple[str, ...] = ()
     directive_aliases: Tuple[str, ...] = ()
+    title_wrapper_aliases: Tuple[str, ...] = ()
     # A leading "<name> " (e.g. "IMF GDP forecast") counts as explicit,
     # unless followed by a membership/geography word (see the router).
     start_of_query: bool = False
@@ -68,6 +76,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="OECD",
         display_name="OECD",
         description="Cross-country economic data for OECD member nations",
+        display_order=7,
         normalize_aliases=("oecd", "经合组织", "经济合作与发展组织"),
         bare_aliases=("oecd data",),
         # 经合组织国家 = "OECD countries" (geography): directive-only.
@@ -79,6 +88,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="FRED",
         display_name="FRED",
         description="US economic data — 800K+ time series from the Federal Reserve Bank of St. Louis",
+        display_order=1,
         normalize_aliases=(
             "fred", "fred (federal reserve)", "federal reserve",
             "st. louis fed", "stlouisfed", "美联储", "圣路易斯联储",
@@ -95,6 +105,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="WorldBank",
         display_name="World Bank",
         description="Global development indicators — 16,000+ series covering 200+ countries",
+        display_order=2,
         normalize_aliases=("world bank", "worldbank", "wb", "世界银行"),
         bare_aliases=("world bank", "worldbank", "wb data", "world bank data", "世界银行"),
         directive_aliases=("world bank", "worldbank", "世界银行"),
@@ -104,6 +115,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="Comtrade",
         display_name="UN Comtrade",
         description="International trade data — bilateral import/export flows by commodity",
+        display_order=8,
         normalize_aliases=(
             "un comtrade", "un_comtrade", "uncomtrade", "comtrade", "un",
             "united nations comtrade", "联合国商品贸易统计数据库",
@@ -120,6 +132,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="StatsCan",
         display_name="Statistics Canada",
         description="Canadian economic and social data — 40,000+ tables",
+        display_order=3,
         normalize_aliases=(
             "statistics canada", "statisticscanada", "stats canada", "statcan", "statscan",
             "加拿大统计局",
@@ -134,6 +147,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="IMF",
         display_name="IMF",
         description="International financial data — balance of payments, exchange rates, fiscal indicators",
+        display_order=5,
         normalize_aliases=("imf", "international monetary fund", "the imf", "国际货币基金组织"),
         bare_aliases=("international monetary fund", "imf data", "国际货币基金组织"),
         directive_aliases=("imf", "the imf", "international monetary fund", "国际货币基金组织"),
@@ -147,6 +161,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
             "Central bank statistics — credit, debt securities, property prices "
             "from the Bank for International Settlements"
         ),
+        display_order=6,
         normalize_aliases=("bis", "bank for international settlements", "国际清算银行"),
         bare_aliases=("bank for international settlements", "bis data", "国际清算银行"),
         directive_aliases=("bis", "bank for international settlements", "国际清算银行"),
@@ -158,6 +173,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="Eurostat",
         display_name="Eurostat",
         description="European Union statistics — demographics, trade, economy across EU members",
+        display_order=4,
         normalize_aliases=("eurostat", "欧盟统计局"),
         bare_aliases=("eurostat data", "欧盟统计局"),
         directive_aliases=("eurostat", "欧盟统计局"),
@@ -168,6 +184,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="ExchangeRate",
         display_name="ExchangeRate-API",
         description="Foreign exchange rates — 160+ currencies with daily updates",
+        display_order=10,
         normalize_aliases=(
             "exchangerate", "exchange rate", "exchangerate-api", "exchange-rate",
             "exchange rate api", "exchange rate-api",
@@ -176,12 +193,17 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         directive_aliases=(
             "exchangerate", "exchange rate api", "exchange rate-api", "exchangerate-api",
         ),
+        # ExchangeRate catalog titles are currency names, so a pasted
+        # "exchange rate Canadian Dollar" must still strip to the title —
+        # but "exchange rate" is ordinary English, never an explicit request.
+        title_wrapper_aliases=("exchange rate",),
     ),
     ProviderSpec(
         canonical="COINGECKO",
         name="CoinGecko",
         display_name="CoinGecko",
         description="Cryptocurrency market data — prices, volumes, market caps",
+        display_order=9,
         normalize_aliases=("coingecko", "coin gecko"),
         bare_aliases=("coingecko", "coin gecko"),
         directive_aliases=("coingecko", "coin gecko"),
@@ -194,6 +216,7 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
             "Fresh Chinese headline macro data — PMI, M2, total social financing, "
             "CPI/PPI, 10-year yield (live from EastMoney/MOFCOM)"
         ),
+        display_order=11,
         normalize_aliases=("chinamacro", "china macro", "china_macro", "china-macro"),
         # Only the coined single token may match bare: "China macro outlook"
         # is ordinary English and must not hard-route.
@@ -282,18 +305,43 @@ def provider_option_labels() -> Dict[str, str]:
     return {spec.canonical: spec.name for spec in PROVIDER_SPECS}
 
 
+_PROVIDER_PROGRESS_LABELS: Dict[str, str] = {
+    spec.canonical: spec.progress_display for spec in PROVIDER_SPECS
+}
+
+
 def provider_progress_labels() -> Dict[str, str]:
     """Canonical provider → name shown in "Retrieving data from ..." steps."""
-    return {spec.canonical: spec.progress_display for spec in PROVIDER_SPECS}
+    return dict(_PROVIDER_PROGRESS_LABELS)
+
+
+def provider_display_specs() -> Tuple[ProviderSpec, ...]:
+    """Registered providers in informational-answer display order.
+
+    Separate from ``PROVIDER_SPECS`` order (which is routing behavior).
+    """
+    return tuple(sorted(PROVIDER_SPECS, key=lambda spec: spec.display_order))
+
+
+def _ordered_unique(values: Tuple[str, ...]) -> Tuple[str, ...]:
+    ordered: list[str] = []
+    for value in values:
+        if value not in ordered:
+            ordered.append(value)
+    return tuple(ordered)
+
+
+# Title-wrapper view: user-text identity forms only (the directive tier is
+# exactly what may follow "from/via/use" in a pasted title) plus the
+# per-spec title-wrapper extras.  The lenient normalize tier ("un", "wb",
+# "federal reserve" labels) is NEVER applied to user text.
+_PROVIDER_TITLE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    spec.canonical: _ordered_unique((*spec.title_wrapper_aliases, *spec.directive_aliases))
+    for spec in PROVIDER_SPECS
+}
 
 
 def provider_title_aliases(provider: str) -> Optional[list[str]]:
     """Provider-name forms that may wrap a pasted title ("... from <alias>")."""
-    spec = get_provider_spec(provider)
-    if spec is None:
-        return None
-    ordered: list[str] = []
-    for alias in (*spec.directive_aliases, *spec.normalize_aliases):
-        if alias not in ordered:
-            ordered.append(alias)
-    return ordered
+    aliases = _PROVIDER_TITLE_ALIASES.get(normalize_provider_name(provider))
+    return list(aliases) if aliases is not None else None

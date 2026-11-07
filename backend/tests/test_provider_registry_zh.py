@@ -128,3 +128,32 @@ def test_marker_followed_by_long_whitespace_run_stays_linear(marker, whitespace)
 )
 def test_source_marker_colon_and_spacing_forms_still_match(query, keyword) -> None:
     assert detect_explicit_provider_match(query) == ("IMF", keyword)
+
+
+# ---------------------------------------------------------------------------
+# Documented known limits of regex directive grammar (strict xfail: the day a
+# mechanism fixes one, the XPASS fails and the entry must be removed).
+# Negation and temporal "since" are SEMANTIC — they must be solved by a
+# parse-LLM explicit-provider field validated against the registry, never by
+# a growing list of compound-word exceptions in the regex.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("query", "intended"),
+    [
+        # 自从 = "since": temporal, not a source directive.
+        ("自从IMF援助以来希腊GDP", None),
+        ("从美联储加息以来人民币汇率走势", None),
+        # 不用 = "do not use": negation flips the intent.
+        ("中国GDP 用世界银行，不用IMF", "WorldBank"),
+        ("不用IMF的数据，中国GDP", None),
+        # English parity (pre-existing): same negation limit.
+        ("not from IMF, China GDP", None),
+        # CJK has no word boundary: 世界银行业 = "world banking industry".
+        ("世界银行业发展", None),
+    ],
+)
+@pytest.mark.xfail(strict=True, reason="known limit: semantic negation/temporal/compound needs LLM explicit-provider field")
+def test_known_limits_of_regex_directive_grammar(query, intended) -> None:
+    match = detect_explicit_provider_match(query)
+    assert (match[0] if match else None) == intended

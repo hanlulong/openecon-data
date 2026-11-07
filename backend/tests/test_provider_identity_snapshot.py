@@ -15,7 +15,9 @@ Covered views:
 - ``IndicatorLookup._normalize_provider`` (indicators.db provider namespace,
   gates every FTS provider filter).
 - ``add_provider_transparency`` note / no-note outcomes.
-- The informational "which data sources" answer.
+- The informational "which data sources" answer (lines and display order).
+- User-visible provider labels (clarification option brackets, progress step).
+- ``exact_title_search_inputs`` (provider-scoped exact-title variants).
 """
 
 from __future__ import annotations
@@ -400,3 +402,289 @@ def test_data_sources_answer_keeps_existing_provider_lines() -> None:
     for line in GOLDEN_DATA_SOURCE_LINES:
         assert line in lines
     assert any(line.startswith("- **FRED** — US economic data") for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# Data-sources answer ORDER (presentation must not follow routing order)
+# ---------------------------------------------------------------------------
+
+GOLDEN_DATA_SOURCE_ORDER = [
+    "FRED", "World Bank", "Statistics Canada", "Eurostat", "IMF", "BIS", "OECD",
+    "UN Comtrade", "CoinGecko", "ExchangeRate-API",
+]
+# ChinaMacro was missing from the answer; it is appended, nothing reorders.
+_INTENDED_DATA_SOURCE_ORDER = [*GOLDEN_DATA_SOURCE_ORDER, "ChinaMacro"]
+
+
+def test_data_sources_answer_keeps_existing_display_order() -> None:
+    import re
+
+    from backend.services.indicator_clarification import _handle_data_sources_query
+
+    message = _handle_data_sources_query("what data sources do you have", "c1").message
+    listed = re.findall(r"^- \*\*(.+?)\*\* — ", message, flags=re.MULTILINE)
+    assert listed == _INTENDED_DATA_SOURCE_ORDER
+
+
+# ---------------------------------------------------------------------------
+# User-visible provider labels (clarification option brackets, progress step)
+# ---------------------------------------------------------------------------
+
+# Effective labels on main: the private maps plus their `.get(p, p)` fallback.
+GOLDEN_OPTION_LABELS = {
+    "OECD": "OECD", "FRED": "FRED", "WORLDBANK": "WorldBank", "COMTRADE": "Comtrade",
+    "STATSCAN": "StatsCan", "IMF": "IMF", "BIS": "BIS", "EUROSTAT": "Eurostat",
+    "EXCHANGERATE": "EXCHANGERATE", "COINGECKO": "COINGECKO", "CHINAMACRO": "ChinaMacro",
+}
+_INTENDED_OPTION_LABEL_CHANGES = {
+    # Registry name form, like WorldBank/StatsCan; parse_indicator_option
+    # normalizes either spelling back to the canonical provider.
+    "EXCHANGERATE": "ExchangeRate",
+    "COINGECKO": "CoinGecko",
+}
+
+GOLDEN_PROGRESS_LABELS = {
+    "OECD": "OECD", "FRED": "Federal Reserve", "WORLDBANK": "World Bank",
+    "COMTRADE": "UN Comtrade", "STATSCAN": "Statistics Canada", "IMF": "IMF",
+    "BIS": "Bank for International Settlements", "EUROSTAT": "Eurostat",
+    "EXCHANGERATE": "EXCHANGERATE", "COINGECKO": "CoinGecko", "CHINAMACRO": "CHINAMACRO",
+}
+_INTENDED_PROGRESS_LABEL_CHANGES = {
+    # Previously fell through to the raw uppercase namespace.
+    "EXCHANGERATE": "ExchangeRate-API",
+    "CHINAMACRO": "ChinaMacro",
+}
+
+
+def test_option_labels_match_golden_except_intended() -> None:
+    from backend.services.indicator_clarification import _PROVIDER_OPTION_LABELS
+
+    expected = {**GOLDEN_OPTION_LABELS, **_INTENDED_OPTION_LABEL_CHANGES}
+    assert {key: _PROVIDER_OPTION_LABELS.get(key, key) for key in expected} == expected
+
+
+def test_progress_labels_match_golden_except_intended() -> None:
+    from backend.utils.providers import provider_progress_labels
+
+    labels = provider_progress_labels()
+    expected = {**GOLDEN_PROGRESS_LABELS, **_INTENDED_PROGRESS_LABEL_CHANGES}
+    assert {key: labels.get(key, key) for key in expected} == expected
+
+
+# ---------------------------------------------------------------------------
+# exact_title_search_inputs (provider-scoped exact-title variants)
+# ---------------------------------------------------------------------------
+
+# Recorded by running main's (d955e99) indicator_resolution.exact_title_search_inputs
+# — loaded from `git show d955e99:backend/services/indicator_resolution.py` —
+# NOT generated from the registry.
+GOLDEN_TITLE_SEARCH_INPUTS = {
+    ('US GDP from FRED', 'FRED'): [
+        'US GDP from FRED',
+        'GDP from FRED',
+        'US GDP',
+        'GDP',
+    ],
+    ('FRED Real GDP', 'FRED'): [
+        'FRED Real GDP',
+        'Real GDP',
+        'GDP',
+    ],
+    ('[FRED] Unemployment Rate', 'FRED'): [
+        '[FRED] Unemployment Rate',
+        'FRED Unemployment Rate',
+        'Unemployment Rate',
+    ],
+    ('Fredericksburg unemployment rate', 'FRED'): [
+        'Fredericksburg unemployment rate',
+        'ericksburg unemployment rate',
+    ],
+    ('Federal Reserve Bank of Philadelphia manufacturing index', 'FRED'): [
+        'Federal Reserve Bank of Philadelphia manufacturing index',
+    ],
+    ('Unemployment Rate from federal reserve', 'FRED'): [
+        'Unemployment Rate from federal reserve',
+    ],
+    ('GDP growth (annual %) from World Bank', 'WorldBank'): [
+        'GDP growth (annual %) from World Bank',
+        'GDP growth annual from World Bank',
+        'GDP growth (annual %)',
+        'growth (annual %) from World Bank, GDP',
+        'GDP growth annual',
+        'growth annual from World Bank, GDP',
+        'GDP growth',
+        'growth annual from World Bank GDP',
+    ],
+    ('[WorldBank] GDP growth (annual %)', 'WorldBank'): [
+        '[WorldBank] GDP growth (annual %)',
+        'WorldBank GDP growth annual',
+        '[WorldBank] GDP growth',
+        'GDP growth (annual %)',
+        'GDP growth annual',
+        'WorldBank GDP growth',
+        'GDP growth',
+    ],
+    ('World Bank GDP per capita', 'WorldBank'): [
+        'World Bank GDP per capita',
+        'Bank GDP per capita',
+        'GDP per capita',
+    ],
+    ('wbc index', 'WorldBank'): [
+        'wbc index',
+    ],
+    ('WBL index score', 'WorldBank'): [
+        'WBL index score',
+    ],
+    ('Labour force characteristics from Statistics Canada', 'StatsCan'): [
+        'Labour force characteristics from Statistics Canada',
+        'Labour force characteristics',
+    ],
+    ('[StatsCan] Consumer Price Index, monthly', 'StatsCan'): [
+        '[StatsCan] Consumer Price Index, monthly',
+        'StatsCan Consumer Price Index monthly',
+        'Consumer Price Index, monthly',
+        'Consumer Price Index monthly',
+    ],
+    ('Consumer Price Index from statcan', 'StatsCan'): [
+        'Consumer Price Index from statcan',
+    ],
+    ('Unwrought aluminium exports', 'Comtrade'): [
+        'Unwrought aluminium exports',
+    ],
+    ('Unmanufactured tobacco', 'Comtrade'): [
+        'Unmanufactured tobacco',
+    ],
+    ('United States imports of crude oil', 'Comtrade'): [
+        'United States imports of crude oil',
+        'imports of crude oil',
+        'crude oil',
+    ],
+    ('UN Comtrade crude oil exports', 'Comtrade'): [
+        'UN Comtrade crude oil exports',
+        'crude oil exports',
+        'Comtrade crude oil exports, UN',
+        'Comtrade crude oil exports UN',
+        'crude oil exports, UN',
+        'crude oil exports UN',
+    ],
+    ('Crude oil exports from comtrade', 'Comtrade'): [
+        'Crude oil exports from comtrade',
+        'Crude oil exports',
+    ],
+    ('Real GDP growth from IMF', 'IMF'): [
+        'Real GDP growth from IMF',
+        'GDP growth from IMF',
+        'Real GDP growth',
+        'GDP growth',
+    ],
+    ('IMF Real GDP growth', 'IMF'): [
+        'IMF Real GDP growth',
+        'Real GDP growth',
+        'GDP growth',
+    ],
+    ('Real GDP growth from the IMF', 'IMF'): [
+        'Real GDP growth from the IMF',
+        'GDP growth from the IMF',
+    ],
+    ('Credit-to-GDP gaps from BIS', 'BIS'): [
+        'Credit-to-GDP gaps from BIS',
+        'Credit to GDP gaps from BIS',
+        'Credit-to-GDP gaps',
+        'Credit to GDP gaps',
+    ],
+    ('Bismuth exports', 'BIS'): [
+        'Bismuth exports',
+        'muth exports',
+    ],
+    ('HICP all items from eurostat', 'Eurostat'): [
+        'HICP all items from eurostat',
+        'HICP all items',
+        'all items from eurostat, HICP',
+        'all items from eurostat HICP',
+    ],
+    ('Eurostat HICP all items', 'Eurostat'): [
+        'Eurostat HICP all items',
+        'HICP all items',
+    ],
+    ('OECD composite leading indicator', 'OECD'): [
+        'OECD composite leading indicator',
+        'composite leading indicator',
+    ],
+    ('Composite leading indicator from oecd', 'OECD'): [
+        'Composite leading indicator from oecd',
+        'Composite leading indicator',
+    ],
+    ('exchange rate Canadian Dollar', 'ExchangeRate'): [
+        'exchange rate Canadian Dollar',
+        'Canadian Dollar',
+    ],
+    ('Canadian Dollar from exchangerate-api', 'ExchangeRate'): [
+        'Canadian Dollar from exchangerate-api',
+        'Canadian Dollar from exchangerate api',
+        'Canadian Dollar',
+    ],
+    ('Exchange rate-API Euro', 'ExchangeRate'): [
+        'Exchange rate-API Euro',
+        'Exchange rate API Euro',
+        '-API Euro',
+        'Euro',
+        'API Euro',
+    ],
+    ('Bitcoin from coingecko', 'CoinGecko'): [
+        'Bitcoin from coingecko',
+        'Bitcoin',
+    ],
+    ('coin gecko ethereum price', 'CoinGecko'): [
+        'coin gecko ethereum price',
+        'ethereum price',
+        'coin gecko ethereum',
+        'ethereum',
+    ],
+    ('China Manufacturing PMI from ChinaMacro', 'ChinaMacro'): [
+        'China Manufacturing PMI from ChinaMacro',
+        'Manufacturing PMI from ChinaMacro',
+        'China Manufacturing PMI',
+        'Manufacturing PMI',
+    ],
+    ('China macroeconomic climate index', 'ChinaMacro'): [
+        'China macroeconomic climate index',
+        'macroeconomic climate index',
+    ],
+    ('ChinaMacro China CPI YoY', 'ChinaMacro'): [
+        'ChinaMacro China CPI YoY',
+        'China CPI YoY',
+        'CPI YoY',
+    ],
+}
+
+# (added, removed) variants vs main.  Everything else — including the
+# relative order of shared variants — must be unchanged.
+_INTENDED_TITLE_INPUT_CHANGES: dict = {
+    # ASCII aliases now need a token boundary in the prefix strip: a provider
+    # name no longer chops the head off an ordinary word.
+    ("Fredericksburg unemployment rate", "FRED"): ((), ("ericksburg unemployment rate",)),
+    ("Bismuth exports", "BIS"): ((), ("muth exports",)),
+    # Directive-tier identity forms now also unwrap a pasted title.
+    ("Unemployment Rate from federal reserve", "FRED"): (("Unemployment Rate",), ()),
+    ("Consumer Price Index from statcan", "StatsCan"): (("Consumer Price Index",), ()),
+    ("Real GDP growth from the IMF", "IMF"): (("Real GDP growth", "GDP growth"), ()),
+    # Additive only (the original input stays first and is searched as-is);
+    # no FRED catalog title equals the stripped remainder.
+    ("Federal Reserve Bank of Philadelphia manufacturing index", "FRED"): (
+        ("Bank of Philadelphia manufacturing index",), (),
+    ),
+}
+
+
+@pytest.mark.parametrize(("text", "provider"), list(GOLDEN_TITLE_SEARCH_INPUTS))
+def test_exact_title_search_inputs_match_golden_except_intended(text, provider) -> None:
+    from backend.services.indicator_resolution import exact_title_search_inputs
+
+    golden = GOLDEN_TITLE_SEARCH_INPUTS[(text, provider)]
+    added, removed = _INTENDED_TITLE_INPUT_CHANGES.get((text, provider), ((), ()))
+    current = exact_title_search_inputs(text, provider)
+    assert current[0] == text
+    assert set(current) == (set(golden) - set(removed)) | set(added)
+    shared_now = [variant for variant in current if variant in golden]
+    shared_before = [variant for variant in golden if variant in current]
+    assert shared_now == shared_before
