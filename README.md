@@ -91,11 +91,11 @@ AI agents hallucinate economic data. When you ask an LLM "What is US GDP?", you 
 | Feature | OpenEcon | fredapi | pandas-datareader | fred-mcp-server |
 |---------|----------|---------|-------------------|-----------------|
 | Natural language queries | Yes | No | No | No |
-| Data sources | 10+ | 1 (FRED) | 5 | 1 (FRED) |
+| Data sources | 10+ | 1 (FRED) | 7 | 1 (FRED) |
 | MCP server for AI agents | Yes | No | No | Yes |
 | Web UI with charts | Yes | No | No | No |
 | Conversational follow-ups | Yes | No | No | No |
-| Smart indicator discovery | 330K indexed | Manual codes | Manual codes | Manual codes |
+| Smart indicator discovery | 330K indexed | Keyword search | Keyword search | Keyword search |
 | Self-hostable | Yes | N/A | N/A | Yes |
 | No code required | Yes | No | No | No |
 
