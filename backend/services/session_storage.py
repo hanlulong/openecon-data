@@ -38,11 +38,22 @@ def force_rmtree(path: Path) -> bool:
     Strategy: normal rmtree first, then a bottom-up sweep that unlinks
     what it can and ``rmdir``s empty-but-unreadable dirs via the parent.
 
+    Never follows links: if ``path`` itself is a link only the link is
+    removed (rmtree refuses links, and the fallback os.walk would otherwise
+    descend into the link's TARGET and unlink files outside the tree); links
+    found inside the tree are unlinked, never traversed.
+
     Returns True when ``path`` is gone afterwards.
     """
     target = Path(path)
+    if os.path.islink(target):
+        try:
+            os.unlink(target)
+        except OSError:
+            pass
+        return not os.path.lexists(target)
     shutil.rmtree(target, ignore_errors=True)
-    if not target.exists():
+    if not os.path.lexists(target):
         return True
     for dirpath, dirnames, filenames in os.walk(target, topdown=False):
         for name in filenames:
@@ -53,14 +64,17 @@ def force_rmtree(path: Path) -> bool:
         for name in dirnames:
             child = os.path.join(dirpath, name)
             try:
-                os.rmdir(child)
+                if os.path.islink(child):
+                    os.unlink(child)
+                else:
+                    os.rmdir(child)
             except OSError:
                 pass
     try:
         os.rmdir(target)
     except OSError:
         pass
-    return not target.exists()
+    return not os.path.lexists(target)
 
 
 class SessionStorage:

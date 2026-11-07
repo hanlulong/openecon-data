@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 from enum import Enum
@@ -349,6 +350,14 @@ class SecureCodeExecutor:
     JAIL_SESS_PATH = "/sess"   # persistent session dir is bound here
     JAIL_TMP_PATH = "/tmp"     # per-exec output dir is bound here (plots land here)
 
+    # Largest sandbox output file the backend will publish. The jail's
+    # RLIMIT_FSIZE (100 MiB, _set_resource_limits) bounds what can be WRITTEN;
+    # publishing is capped tighter since real charts/CSVs are a few MB at most.
+    MAX_PUBLISHED_FILE_BYTES = 50 * 1024 * 1024
+    # result.json carries output[:max_output_size] + capped error/stderr; JSON
+    # escaping can inflate it several-fold, so the read cap is generous.
+    MAX_RESULT_FILE_BYTES = 16 * 1024 * 1024
+
     # Lazily-computed result of the boot canary self-test. None=not yet run,
     # True=jail healthy, False=jail broken (Pro Mode fails closed).
     _canary_ok: Optional[bool] = None
@@ -599,8 +608,6 @@ class SecureCodeExecutor:
 
         for out_file in sorted(tmp_out_dir.glob("promode_*")):
             try:
-                if not out_file.is_file():
-                    continue
                 suffix = out_file.suffix.lower()
                 if suffix not in allowed_suffixes:
                     continue
@@ -612,12 +619,11 @@ class SecureCodeExecutor:
                 unique_name = f"promode_{tmp_out_dir.name}_{out_file.name[len('promode_'):]}"
                 dest_file = self.public_dir / unique_name
 
-                shutil.move(str(out_file), str(dest_file))
-                # World-readable so Apache can serve it; not writable.
-                try:
-                    os.chmod(dest_file, 0o644)
-                except OSError:
-                    pass
+                # The jailed program fully controls every entry in this dir, so
+                # never trust a path: copy bytes from a verified regular file into
+                # a NEW backend-owned file (see _publish_untrusted_file).
+                if not self._publish_untrusted_file(out_file, dest_file):
+                    continue
 
                 url = f"/static/promode/{unique_name}"
                 file_type = {
@@ -633,6 +639,143 @@ class SecureCodeExecutor:
                 logger.warning(f"Failed to collect file {out_file}: {e}")
 
         return files
+
+    @staticmethod
+    def _reject_untrusted_entry(path: Path, reason: str, **detail: Any) -> None:
+        """One structured warning per rejected sandbox output entry (no contents)."""
+        logger.warning(
+            "promode_output_rejected entry=%s reason=%s %s",
+            path.name, reason,
+            " ".join(f"{k}={v}" for k, v in sorted(detail.items())),
+        )
+
+    @classmethod
+    def _open_untrusted_regular_file(cls, path: Path, max_bytes: int) -> Optional[int]:
+        """Open a sandbox-written entry for reading WITHOUT following links.
+
+        Returns a read-only fd only when the entry is a plain regular file with a
+        single link and size <= max_bytes, verified both before (lstat) and after
+        (fstat on the opened fd, same st_dev/st_ino) the open so a swap in
+        between is detected. O_NOFOLLOW refuses a symlink at open time and
+        O_NONBLOCK keeps a swapped-in FIFO from blocking the backend. Returns
+        None (after logging) for anything else. Caller owns the fd.
+        """
+        try:
+            st = os.lstat(path)
+        except OSError as e:
+            cls._reject_untrusted_entry(path, "lstat_failed", errno=e.errno)
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            cls._reject_untrusted_entry(path, "not_regular_file", mode=oct(st.st_mode))
+            return None
+        if st.st_nlink != 1:
+            cls._reject_untrusted_entry(path, "multiple_links", nlink=st.st_nlink)
+            return None
+        if st.st_size > max_bytes:
+            cls._reject_untrusted_entry(path, "too_large", size=st.st_size, cap=max_bytes)
+            return None
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError as e:
+            cls._reject_untrusted_entry(path, "open_refused", errno=e.errno)
+            return None
+        try:
+            fst = os.fstat(fd)
+            if (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+                cls._reject_untrusted_entry(path, "changed_during_open")
+            elif not stat.S_ISREG(fst.st_mode) or fst.st_nlink != 1:
+                cls._reject_untrusted_entry(path, "not_regular_file_after_open")
+            elif fst.st_size > max_bytes:
+                cls._reject_untrusted_entry(path, "too_large", size=fst.st_size, cap=max_bytes)
+            else:
+                return fd
+        except OSError as e:
+            cls._reject_untrusted_entry(path, "fstat_failed", errno=e.errno)
+        os.close(fd)
+        return None
+
+    @classmethod
+    def _read_untrusted_text(cls, path: Path, max_bytes: int) -> Optional[str]:
+        """Read a sandbox-written regular file (no link following, size-capped)."""
+        fd = cls._open_untrusted_regular_file(path, max_bytes)
+        if fd is None:
+            return None
+        try:
+            chunks, total = [], 0
+            while total <= max_bytes:
+                chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            if total > max_bytes:
+                cls._reject_untrusted_entry(path, "too_large_during_read", cap=max_bytes)
+                return None
+            return b"".join(chunks).decode("utf-8", errors="replace")
+        except OSError as e:
+            cls._reject_untrusted_entry(path, "read_failed", errno=e.errno)
+            return None
+        finally:
+            os.close(fd)
+
+    def _publish_untrusted_file(self, src: Path, dest: Path) -> bool:
+        """Copy a sandbox-written file into the public dir as a NEW backend file.
+
+        SECURITY INVARIANT: the published file is always created here by the
+        backend (O_CREAT|O_EXCL|O_NOFOLLOW) and its mode is set with fchmod on
+        that fd — never a path-based move/chmod — so no link planted by the
+        jailed program can redirect what is published or whose mode changes.
+        At most MAX_PUBLISHED_FILE_BYTES are copied; a file that grows past the
+        cap mid-copy is discarded rather than published truncated. The source
+        is unlinked afterwards (unlink never follows a link).
+        """
+        cap = self.MAX_PUBLISHED_FILE_BYTES
+        src_fd = self._open_untrusted_regular_file(src, cap)
+        if src_fd is None:
+            return False
+        dest_fd = None
+        ok = False
+        try:
+            dest_fd = os.open(
+                dest,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0),
+                0o644,
+            )
+            copied = 0
+            while True:
+                chunk = os.read(src_fd, min(1024 * 1024, cap + 1 - copied))
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > cap:
+                    self._reject_untrusted_entry(src, "too_large_during_copy", cap=cap)
+                    break
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(dest_fd, view):]
+            if copied <= cap:
+                # World-readable so Apache can serve it; not writable. fd-based so
+                # the umask-independent mode applies to OUR file only.
+                os.fchmod(dest_fd, 0o644)
+                ok = True
+        except OSError as e:
+            self._reject_untrusted_entry(src, "publish_failed", errno=e.errno)
+        finally:
+            os.close(src_fd)
+            if dest_fd is not None:
+                os.close(dest_fd)
+                if not ok:
+                    try:
+                        os.unlink(dest)
+                    except OSError:
+                        pass
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
+        return ok
 
     @staticmethod
     def _merge_stderr(result: Dict[str, Any], session_id: str) -> None:
@@ -1061,23 +1204,26 @@ finally:
                     "error": f"Code execution timed out after {timeout} seconds"
                 }
 
-            # Read result file
+            # Read result file. It is written by the jailed program, so it is
+            # read through the same no-follow/regular-file gate as published
+            # output (a link here must never make the backend read a host file).
             result_file = work_dir / "result.json"
-            if result_file.exists():
+            if os.path.lexists(result_file):
+                raw_content = self._read_untrusted_text(result_file, self.MAX_RESULT_FILE_BYTES)
+                if raw_content is None:
+                    return {
+                        "success": False,
+                        "error": "Execution result was not a readable regular file",
+                    }
                 try:
-                    with open(result_file) as f:
-                        result = json.load(f)
+                    result = json.loads(raw_content)
+                    if not isinstance(result, dict):
+                        raise json.JSONDecodeError("result is not an object", raw_content, 0)
                     logger.info(f"Code execution result: success={result.get('success')}")
                     return result
                 except json.JSONDecodeError as e:
-                    # Read the raw content for debugging
-                    try:
-                        with open(result_file, 'r') as f:
-                            raw_content = f.read()[:1000]
-                    except:
-                        raw_content = "[could not read file]"
                     stderr_text = stderr.decode() if stderr else ""
-                    logger.error(f"Failed to parse result JSON: {e}, raw content: {raw_content[:200]}, stderr: {stderr_text[:200]}")
+                    logger.error(f"Failed to parse result JSON: {e}, raw content: {raw_content[:200]!r}, stderr: {stderr_text[:200]}")
                     return {
                         "success": False,
                         "error": f"Failed to parse execution result: {str(e)[:100]}. stderr: {stderr_text[:300]}"
@@ -1273,20 +1419,44 @@ finally:
             import grp
             gid = grp.getgrnam("promode-share").gr_gid
             session_root = self.session_dir.resolve()
+            cur = path.resolve()
+            # CONTAINMENT: only ever loosen dirs at or below the session root. A
+            # target that resolves elsewhere (a link anywhere on its path) would
+            # otherwise walk up to "/" opening every host ancestor to the group.
+            if cur != session_root and session_root not in cur.parents:
+                logger.warning(
+                    "promode_sharing_perms_refused path=%s reason=outside_session_root",
+                    path,
+                )
+                return
             # Walk from the target up to (and including) the session root, applying
             # group ownership + setgid + group-rwx so the whole path is reachable.
-            cur = path.resolve()
             while True:
-                try:
-                    os.chown(cur, -1, gid)
-                    os.chmod(cur, 0o2770)  # rwx owner+group, setgid, none for other
-                except (PermissionError, FileNotFoundError):
-                    pass
+                self._share_dir_nofollow(cur, gid)
                 if cur == session_root or cur == cur.parent:
                     break
                 cur = cur.parent
         except Exception as e:
             logger.warning(f"Could not apply Layer-2 sharing perms to {path}: {e}")
+
+    @staticmethod
+    def _share_dir_nofollow(path: Path, gid: int) -> None:
+        """chgrp + chmod 2770 one directory via an O_NOFOLLOW|O_DIRECTORY fd, so
+        a link swapped in at ``path`` can never redirect the mode change."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                         | getattr(os, "O_CLOEXEC", 0))
+        except OSError:
+            # Not a real dir (e.g. a link), vanished, or unreadable: leave it.
+            return
+        try:
+            try:
+                os.fchown(fd, -1, gid)
+                os.fchmod(fd, 0o2770)  # rwx owner+group, setgid, none for other
+            except (PermissionError, FileNotFoundError):
+                pass
+        finally:
+            os.close(fd)
 
     def _maybe_wrap_with_promode_uid(self, inner_cmd: List[str]) -> List[str]:
         """
