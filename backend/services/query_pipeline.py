@@ -30,6 +30,11 @@ class ParseRouteResult:
     explicit_provider: Optional[str]
     routed_provider: str
     validation_warning: Optional[str]
+    # Catalog snapshot token (IndicatorLookup.catalog_version()) a
+    # deterministic catalog shortcut built this result against; None for LLM
+    # parses or when the snapshot is unobservable.  Lets an intent-cache hit
+    # prove the shortcut would still return the same answer.
+    catalog_version: Optional[str] = None
 
 
 @dataclass

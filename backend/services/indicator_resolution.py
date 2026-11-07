@@ -627,6 +627,25 @@ def is_exact_match_locked(params: Optional[dict]) -> bool:
     )
 
 
+def exact_title_catalog_version() -> Optional[str]:
+    """Catalog snapshot token the exact-title builder reads from right now.
+
+    The builder is a deterministic function of the query text and the
+    catalog, so a result stamped with this token is still the builder's
+    answer while the token is unchanged.  ``None`` when the snapshot cannot
+    be observed (no lookup, or a lookup that cannot see out-of-process
+    writes); callers must then treat the catalog as possibly changed.
+    """
+    try:
+        from .indicator_database import get_indicator_lookup
+
+        version_fn = getattr(get_indicator_lookup(), "catalog_version", None)
+        version = version_fn() if callable(version_fn) else None
+    except Exception:
+        return None
+    return version if isinstance(version, str) else None
+
+
 def build_exact_indicator_title_intent(
     query: str,
     *,
@@ -1239,21 +1258,16 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                     from .indicator_database import get_indicator_lookup
 
                     raw_lookup = get_indicator_lookup()
-                    conn = raw_lookup.db._get_connection()  # pylint: disable=protected-access
-                    cursor = conn.cursor()
                     for cleaned_variant in cleaned_variants:
-                        cursor.execute(
-                            """
-                            SELECT *
-                            FROM indicators
-                            WHERE provider = ?
-                              AND lower(name) LIKE ?
-                            ORDER BY COALESCE(popularity, 0) DESC, code
-                            LIMIT 20
-                            """,
-                            (raw_lookup._normalize_provider(provider_name), f"%{cleaned_variant.lower()}%"),
+                        # Memoized per catalog snapshot and evaluated on the
+                        # indexed title expression: this substring probe used
+                        # to scan every FRED row on each request FTS missed.
+                        candidates_by_input.extend(
+                            (search_text, row)
+                            for row in raw_lookup.name_contains_matches(
+                                cleaned_variant.lower(), provider=provider_name, limit=20
+                            )
                         )
-                        candidates_by_input.extend((search_text, dict(row)) for row in cursor.fetchall())
                 except Exception:
                     continue
 

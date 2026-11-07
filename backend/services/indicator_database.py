@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
 import string
@@ -57,12 +58,19 @@ _WB_ARCHIVAL_SOURCE_MARKERS = ("archive", "discontinued", "doing business")
 _SQLITE_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 
 # Read-side catalog caches (stored provider spellings, irregular-title index,
-# exact-title memo) are rebuilt after this many seconds so out-of-process
-# catalog refreshes (scripts/fetch_all_indicators.py) are picked up without a
-# restart; in-process writes invalidate them immediately via
-# IndicatorDatabase.catalog_generation.
+# lookup memo) are keyed on IndicatorDatabase.catalog_signature(): in-process
+# writes bump catalog_generation, and out-of-process refreshes
+# (scripts/fetch_all_indicators.py) change the database file or its WAL, so
+# either invalidates them on the next lookup without a restart.  Age bounds
+# are only a backstop: the long one while the file signature is observable,
+# the short one when it is not (non-file DB objects, unreadable paths).
+_CATALOG_CACHE_MAX_AGE_SECONDS = 3600.0
 _CATALOG_CACHE_TTL_SECONDS = 300.0
+# The lookup memo holds whole catalog rows (descriptions, keywords, raw
+# metadata: ~1-15KB each), so bound it by approximate payload size as well as
+# by entry count; several processes (uvicorn workers + MCP) each hold one.
 _LOOKUP_MEMO_MAX_ENTRIES = 2048
+_LOOKUP_MEMO_MAX_BYTES = 16 * 1024 * 1024
 
 
 def _sqlite_lower(value: str) -> str:
@@ -78,6 +86,16 @@ def _sqlite_prefix_upper_bound(prefix: str) -> str:
     index can serve.  Callers pass non-empty ``[a-z0-9]`` tokens.
     """
     return prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
+def _approx_rows_bytes(rows: List[Dict[str, Any]]) -> int:
+    """Rough in-memory footprint of memoized rows (text length + overheads)."""
+    total = 64
+    for row in rows:
+        total += 240
+        for value in row.values():
+            total += 56 + (len(value) if isinstance(value, str) else 8)
+    return total
 
 
 def _catalog_row(row: Any) -> Dict[str, Any]:
@@ -150,6 +168,50 @@ class IndicatorDatabase:
         # Bumped on every committed in-process write so read-side caches in
         # IndicatorLookup (provider spellings, exact-title memo) invalidate.
         self.catalog_generation = 0
+        # Bumped whenever search() swallows an error and returns [], so
+        # callers can tell a failed search from a genuine no-match and avoid
+        # caching the failure.
+        self.search_failures = 0
+        self._signature_path: Optional[str] = None
+
+    def catalog_signature(self) -> Tuple[Any, ...]:
+        """Cheap token that changes whenever the stored catalog may have changed.
+
+        ``(catalog_generation, file_state)``.  In-process writes bump the
+        generation.  Out-of-process writers (offline refresh scripts) change
+        the database file or its WAL: a commit appends/rewrites ``-wal``
+        frames, a checkpoint rewrites the main file, and a rebuilt-and-swapped
+        file has a new inode -- each moves (inode, size, mtime_ns).  Readers
+        never change either file's content, so the token is stable while
+        nothing writes.
+        Costs two ``stat`` calls and no SQL.  ``file_state`` is ``None`` when
+        the file cannot be stat'ed; callers must then bound staleness by age.
+        """
+        generation = getattr(self, "catalog_generation", 0)
+        path = getattr(self, "_signature_path", None)
+        if path is None:
+            db_path = getattr(self, "db_path", None)
+            if db_path is None:
+                return (generation, None)
+            try:
+                path = self._signature_path = os.path.realpath(str(db_path))
+            except (OSError, TypeError, ValueError):
+                return (generation, None)
+        try:
+            st = os.stat(path)
+        except OSError:
+            return (generation, None)
+        # A missing and an empty WAL hold the same (no) frames; SQLite creates
+        # the empty file lazily on a connection's first read, which must not
+        # read as a catalog change.
+        wal_state: Optional[Tuple[int, int, int]] = None
+        try:
+            wal = os.stat(path + "-wal")
+            if wal.st_size:
+                wal_state = (wal.st_ino, wal.st_size, wal.st_mtime_ns)
+        except OSError:
+            pass
+        return (generation, ((st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns), wal_state))
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create THIS THREAD's database connection.
@@ -549,6 +611,7 @@ class IndicatorDatabase:
             # Swallowing the error keeps retrieval degradation graceful
             # (embedding retrieval still runs), but it MUST be diagnosable:
             # log the inputs and full traceback, not just str(e).
+            self.search_failures = getattr(self, "search_failures", 0) + 1
             logger.exception(
                 "Search error for query=%r provider=%r category=%r fts_query=%r",
                 query, provider, category, fts_query,
@@ -688,54 +751,118 @@ class IndicatorLookup:
     # Read-side catalog caches (structural: plumbing over stored metadata)
     # ------------------------------------------------------------------
 
+    def _catalog_signature(self) -> Tuple[Tuple[Any, ...], bool]:
+        """``(token, file_tracked)`` for the catalog snapshot lookups read.
+
+        ``file_tracked`` is True when the token also observes out-of-process
+        writes (see :meth:`IndicatorDatabase.catalog_signature`).  DB objects
+        without a signature (test doubles) fall back to the in-process write
+        generation alone.
+        """
+        signature_fn = getattr(self.db, "catalog_signature", None)
+        if callable(signature_fn):
+            try:
+                signature = signature_fn()
+            except Exception:
+                signature = None
+            if isinstance(signature, tuple) and len(signature) == 2:
+                return signature, signature[1] is not None
+        return (getattr(self.db, "catalog_generation", 0), None), False
+
+    def catalog_version(self) -> Optional[str]:
+        """Opaque token for the catalog snapshot lookups currently answer from.
+
+        Two equal tokens mean no catalog write (in-process or observed
+        out-of-process) happened in between, so any deterministic function of
+        lookup results computed under the first token still holds.  ``None``
+        when out-of-process writes cannot be observed -- callers must not
+        treat that as "unchanged".
+        """
+        signature, file_tracked = self._catalog_signature()
+        return repr(signature) if file_tracked else None
+
     def _catalog_cache(self) -> Dict[str, Any]:
         """Return the current read-cache bucket, rebuilding it when stale.
 
-        Staleness signals: the DB's in-process write generation and a TTL for
-        out-of-process catalog refreshes.  Instances built via ``__new__``
-        (some tests) lazily get their lock/state here.
+        A bucket lives as long as the catalog signature is unchanged (see
+        :meth:`_catalog_signature`), so the derived indexes are built once per
+        catalog snapshot rather than once per TTL.  The age bound is only a
+        backstop, short when the signature cannot observe out-of-process
+        writes.  Instances built via ``__new__`` (some tests) lazily get their
+        lock/state here.
         """
         lock = getattr(self, "_catalog_lock", None)
         if lock is None:
             lock = self._catalog_lock = threading.Lock()
-        generation = getattr(self.db, "catalog_generation", 0)
+        signature, file_tracked = self._catalog_signature()
+        max_age = _CATALOG_CACHE_MAX_AGE_SECONDS if file_tracked else _CATALOG_CACHE_TTL_SECONDS
         now = time.monotonic()
         with lock:
             state = getattr(self, "_catalog_state", None)
             if (
                 state is None
-                or state["generation"] != generation
-                or now - state["built_at"] > _CATALOG_CACHE_TTL_SECONDS
+                or state["signature"] != signature
+                or now - state["built_at"] > max_age
             ):
                 state = {
-                    "generation": generation,
+                    "signature": signature,
                     "built_at": now,
                     "providers": None,
                     "irregular_names": {},
                     "memo": OrderedDict(),
+                    "memo_bytes": 0,
                 }
                 self._catalog_state = state
             return state
 
-    def _memo_get(self, key: Tuple[Any, ...]) -> Optional[List[Dict[str, Any]]]:
-        """Return a private copy of memoized lookup rows, or None on a miss."""
-        state = self._catalog_cache()
-        with self._catalog_lock:
-            cached = state["memo"].get(key)
-            if cached is None:
-                return None
-            state["memo"].move_to_end(key)
-        return [dict(row) for row in cached]
+    def _memo_get(
+        self, key: Tuple[Any, ...]
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any]]:
+        """Return ``(private copy of memoized rows or None, bucket consulted)``.
 
-    def _memo_put(self, key: Tuple[Any, ...], rows: List[Dict[str, Any]]) -> None:
-        """Memoize lookup rows (copied; callers may mutate what they return)."""
+        Hand the bucket to :meth:`_memo_put` on a miss: a result is stored
+        only into the bucket that was current BEFORE it was computed, so a
+        catalog change landing mid-lookup can never file pre-change rows
+        under the post-change snapshot.
+        """
         state = self._catalog_cache()
         with self._catalog_lock:
+            entry = state["memo"].get(key)
+            if entry is None:
+                return None, state
+            state["memo"].move_to_end(key)
+        return [dict(row) for row in entry[1]], state
+
+    def _memo_put(
+        self,
+        state: Dict[str, Any],
+        key: Tuple[Any, ...],
+        rows: List[Dict[str, Any]],
+    ) -> None:
+        """Memoize lookup rows (copied; callers may mutate what they return).
+
+        Bounded by entry count and approximate payload bytes (LRU eviction);
+        a single result too large to share the budget is not memoized.
+        """
+        rows_copy = [dict(row) for row in rows]
+        size = _approx_rows_bytes(rows_copy)
+        if size > _LOOKUP_MEMO_MAX_BYTES // 8:
+            return
+        with self._catalog_lock:
+            if getattr(self, "_catalog_state", None) is not state:
+                return  # catalog changed while the rows were computed
             memo = state["memo"]
-            memo[key] = [dict(row) for row in rows]
-            memo.move_to_end(key)
-            while len(memo) > _LOOKUP_MEMO_MAX_ENTRIES:
-                memo.popitem(last=False)
+            previous = memo.pop(key, None)
+            if previous is not None:
+                state["memo_bytes"] -= previous[0]
+            memo[key] = (size, rows_copy)
+            state["memo_bytes"] += size
+            while memo and (
+                len(memo) > _LOOKUP_MEMO_MAX_ENTRIES
+                or state["memo_bytes"] > _LOOKUP_MEMO_MAX_BYTES
+            ):
+                _evicted_key, (evicted_size, _rows) = memo.popitem(last=False)
+                state["memo_bytes"] -= evicted_size
 
     def _stored_provider_spellings(self, provider: str) -> Optional[Tuple[str, ...]]:
         """Stored provider values that ``provider = ? COLLATE NOCASE`` matches.
@@ -793,7 +920,7 @@ class IndicatorLookup:
         (provider, lower(trim(name))) index already finds it.  Only titles with
         non-ASCII characters (casefold differs from SQLite lower) or non-space
         edge whitespace need Python folding; they are a few thousand rows
-        catalog-wide, so index them once per cache generation instead of
+        catalog-wide, so index them once per catalog snapshot instead of
         scanning the whole provider catalog on every non-ASCII probe.
         """
         state = self._catalog_cache()
@@ -857,9 +984,9 @@ class IndicatorLookup:
         # whole match set); the exact-title shortcut alone issues one per
         # search variant per provider on every request.  Results are a pure
         # function of (query, provider, category, limit) and the catalog
-        # snapshot, so memoize them per catalog generation.
+        # snapshot, so memoize them per snapshot.
         memo_key = ("search", query, provider, category, limit)
-        cached = self._memo_get(memo_key)
+        cached, memo_state = self._memo_get(memo_key)
         if cached is not None:
             return cached
 
@@ -867,11 +994,16 @@ class IndicatorLookup:
         # BM25 favours term repetition; _rank_results applies quality signals
         # (popularity, name density, aggregate boost) that need a broad pool.
         db_limit = max(limit * 10, 200)
+        failures_before = getattr(self.db, "search_failures", 0)
         results = self.db.search(query, provider, category, db_limit)
 
         # Post-process and rank results
         ranked = self._rank_results(results, query)[:limit]
-        self._memo_put(memo_key, ranked)
+        # db.search() turns errors (busy timeout, FTS rebuild in progress)
+        # into []; memoizing that would black out lexical retrieval for this
+        # key until the catalog changes, where it used to cost one request.
+        if getattr(self.db, "search_failures", 0) == failures_before:
+            self._memo_put(memo_state, memo_key, ranked)
         return ranked
 
     def exact_name_matches(
@@ -888,7 +1020,7 @@ class IndicatorLookup:
         normalization injects extra terms ("money supply", "monetary").  Exact
         title matching must stay literal, provider-scoped, and side-effect free.
 
-        Results are memoized per catalog generation (bounded LRU, see
+        Results are memoized per catalog snapshot (bounded LRU, see
         :meth:`_memo_get`): the exact-title shortcut probes every provider on
         every request, and the answer is a pure function of the inputs and
         the catalog snapshot.
@@ -901,11 +1033,53 @@ class IndicatorLookup:
         if not raw_inputs:
             return []
         memo_key = ("exact_name", raw_inputs, self._normalize_provider(provider), limit)
-        cached = self._memo_get(memo_key)
+        cached, memo_state = self._memo_get(memo_key)
         if cached is not None:
             return cached
         rows = self._exact_name_matches_uncached(list(raw_inputs), provider, limit)
-        self._memo_put(memo_key, rows)
+        self._memo_put(memo_state, memo_key, rows)
+        return rows
+
+    def name_contains_matches(
+        self,
+        needle: str,
+        provider: Optional[str],
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Provider rows whose lowered title contains ``needle``.
+
+        Same rows, same order as
+        ``provider = ? AND lower(name) LIKE '%needle%'
+        ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?`` (the provider
+        predicate is the NOCASE-equivalent :meth:`_provider_filter`).  A
+        substring LIKE cannot seek an index, but when ``needle`` is a plain
+        literal (no LIKE wildcard, no edge space) every occurrence lies inside
+        the trimmed title, so the predicate can be evaluated on the indexed
+        ``lower(trim(name))`` expression straight from idx_provider_lower_name
+        instead of decoding every table row of the provider (~10x less I/O).
+        Results are memoized per catalog snapshot like the other lookups.
+        """
+        needle = str(needle or "")
+        normalized_provider = self._normalize_provider(provider)
+        if not needle or not normalized_provider:
+            return []
+        memo_key = ("name_contains", needle, normalized_provider, limit)
+        cached, memo_state = self._memo_get(memo_key)
+        if cached is not None:
+            return cached
+        provider_sql, provider_params = self._provider_filter(normalized_provider)
+        plain_literal = "%" not in needle and "_" not in needle and needle == needle.strip(" ")
+        name_expr = "lower(trim(name))" if plain_literal else "lower(name)"
+        conn = self.db._get_connection()  # pylint: disable=protected-access
+        rows = [
+            _catalog_row(row)
+            for row in conn.execute(
+                f"SELECT * FROM indicators WHERE {provider_sql} AND {name_expr} LIKE ? "
+                "ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?",
+                [*provider_params, f"%{needle}%", max(1, limit)],
+            ).fetchall()
+        ]
+        self._memo_put(memo_state, memo_key, rows)
         return rows
 
     def _exact_name_matches_uncached(

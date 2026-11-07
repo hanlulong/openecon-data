@@ -115,6 +115,7 @@ from ..services.execution_planner import build_minimal_execution_plan as _ep_bui
 from ..services.indicator_resolution import (
     _effective_original_query as _ir_effective_original_query,
     build_exact_indicator_title_intent as _ir_build_exact_indicator_title_intent,
+    exact_title_catalog_version as _ir_exact_title_catalog_version,
     code_semantic_hint as _ir_code_semantic_hint,
     is_provider_locked as _ir_is_provider_locked,
     score_resolved_indicator_relevance as _ir_score_resolved_indicator_relevance,
@@ -978,6 +979,10 @@ class QueryService:
             countries=self._extract_countries_from_query(query),
             all_providers=list(ALL_PROVIDERS),
         )
+
+    def _exact_title_catalog_version(self) -> Optional[str]:
+        """Catalog snapshot token for :meth:`_build_exact_indicator_title_intent`."""
+        return _ir_exact_title_catalog_version()
 
     def _add_provider_transparency(
         self,
@@ -5526,17 +5531,27 @@ class QueryService:
                         if conversation_context is None
                         else None
                     )
-                    # A cached intent that the exact-title builder itself
-                    # produced for this very query text already IS the
-                    # builder's outcome (in-process cache, same code, same
-                    # catalog snapshot), so re-running it could only return
-                    # the same provider/indicator and the refresh below would
-                    # be a no-op. Any other cached intent (LLM parse, or a
+                    # The exact-title builder is a deterministic function of
+                    # the query text and the catalog. A cached intent it
+                    # produced for this very text, stamped with the catalog
+                    # snapshot it read, is still its answer while that
+                    # snapshot token is unchanged (no in-process write, no
+                    # observed out-of-process refresh), so re-running it could
+                    # only return the same provider/indicator and the refresh
+                    # below would be a no-op. Anything else -- an LLM parse, a
                     # case-variant of the text sharing the case-insensitive
-                    # cache key) still gets the deterministic refresh check.
+                    # cache key, a changed or unobservable catalog -- still
+                    # gets the deterministic refresh check.
+                    _catalog_version = (
+                        self._exact_title_catalog_version()
+                        if conversation_context is None
+                        else None
+                    )
                     _cached_is_title_shortcut = bool(
                         (parse_result.intent.parameters or {}).get("__exact_indicator_title_match")
                         and parse_result.intent.originalQuery == query
+                        and _catalog_version is not None
+                        and getattr(parse_result, "catalog_version", None) == _catalog_version
                     )
                     exact_title_intent = (
                         await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
@@ -5564,6 +5579,9 @@ class QueryService:
                                 explicit_provider=shortcut_intent.apiProvider,
                                 routed_provider=shortcut_intent.apiProvider,
                                 validation_warning=None,
+                                catalog_version=(
+                                    _catalog_version if exact_title_intent is not None else None
+                                ),
                             )
                             if _query_hash:
                                 _put_cached_parse_result(_query_hash, parse_result)
@@ -5575,6 +5593,14 @@ class QueryService:
                             )
                 else:
                     exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
+                    # Read the snapshot token BEFORE the builder runs: if the
+                    # catalog changes mid-build the stamp is already stale, so
+                    # a later cache hit re-checks instead of trusting it.
+                    _catalog_version = (
+                        self._exact_title_catalog_version()
+                        if conversation_context is None and exact_code_intent is None
+                        else None
+                    )
                     exact_title_intent = (
                         await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
                         if conversation_context is None and exact_code_intent is None
@@ -5587,6 +5613,7 @@ class QueryService:
                             explicit_provider=shortcut_intent.apiProvider,
                             routed_provider=shortcut_intent.apiProvider,
                             validation_warning=None,
+                            catalog_version=_catalog_version if exact_title_intent is not None else None,
                         )
                         logger.info(
                             "⚡ Parse shortcut: %s -> %s/%s",

@@ -13,7 +13,12 @@ These tests pin the MECHANISM:
   with the production schema);
 * mixed-case stored providers still match any caller spelling;
 * every per-request statement is served by an index (EXPLAIN QUERY PLAN);
-* the bounded memo serves repeats without SQL and invalidates on writes/TTL.
+* the bounded memo serves repeats without SQL and invalidates on in-process
+  writes, on out-of-process writes (file/WAL signature) and on its age
+  backstop -- never on plain reads -- and never files pre-change rows under a
+  post-change snapshot;
+* the FRED substring probe (``name_contains_matches``) returns exactly what
+  its original ``lower(name) LIKE '%..%'`` statement returned.
 """
 
 from __future__ import annotations
@@ -486,17 +491,260 @@ def test_lookup_memo_invalidates_on_catalog_write(catalog) -> None:
     assert [row["code"] for row in rows] == ["NEW1"]
 
 
-def test_lookup_memo_expires_after_ttl(catalog, monkeypatch) -> None:
+def test_file_tracked_cache_uses_long_age_backstop_only(catalog, monkeypatch) -> None:
     lookup = IndicatorLookup(db=catalog)
     lookup.exact_name_matches(["Gross Domestic Product"], provider="FRED")
     state = lookup._catalog_state
-    monkeypatch.setattr(
-        indicator_database,
-        "_CATALOG_CACHE_TTL_SECONDS",
-        -1.0,
-    )
+    # The file signature observes out-of-process writes, so the short TTL
+    # (meant for unobservable catalogs) must not churn the derived indexes.
+    monkeypatch.setattr(indicator_database, "_CATALOG_CACHE_TTL_SECONDS", -1.0)
+    lookup.exact_name_matches(["Gross Domestic Product"], provider="FRED")
+    assert lookup._catalog_state is state
+    monkeypatch.setattr(indicator_database, "_CATALOG_CACHE_MAX_AGE_SECONDS", -1.0)
     lookup.exact_name_matches(["Gross Domestic Product"], provider="FRED")
     assert lookup._catalog_state is not state
+
+
+def test_untracked_catalog_falls_back_to_short_ttl(monkeypatch) -> None:
+    class _DB:
+        catalog_generation = 0
+
+        def search(self, query, provider=None, category=None, limit=20):
+            return []
+
+    lookup = IndicatorLookup(db=_DB())
+    assert lookup.catalog_version() is None
+    lookup.search("gdp")
+    state = lookup._catalog_state
+    lookup.search("gdp")
+    assert lookup._catalog_state is state
+    monkeypatch.setattr(indicator_database, "_CATALOG_CACHE_TTL_SECONDS", -1.0)
+    lookup.search("gdp")
+    assert lookup._catalog_state is not state
+
+
+def _external_insert(db_path: Path, code: str, name: str) -> None:
+    """Commit a row through a separate connection, as an offline refresh would.
+
+    The large description grows the database file (rollback journal) or
+    appends WAL frames, so the change is visible to a stat-based signature
+    even within one filesystem timestamp tick.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO indicators (provider, code, name, description, popularity) "
+            "VALUES ('FRED', ?, ?, ?, 1)",
+            (code, name, "x" * 65536),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("journal_mode", ["delete", "wal"])
+def test_out_of_process_write_invalidates_without_restart(catalog, journal_mode) -> None:
+    conn = catalog._get_connection()
+    assert conn.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0].lower() == journal_mode
+    lookup = IndicatorLookup(db=catalog)
+    assert lookup.exact_name_matches(["Offline Refresh Title"], provider="FRED") == []
+    assert lookup.name_contains_matches("offline refresh", provider="FRED") == []
+    version_before = lookup.catalog_version()
+    assert version_before is not None
+
+    _external_insert(catalog.db_path, "OFFLINE1", "Offline Refresh Title")
+
+    assert lookup.catalog_version() != version_before
+    assert [row["code"] for row in lookup.exact_name_matches(["Offline Refresh Title"], provider="FRED")] == ["OFFLINE1"]
+    assert [row["code"] for row in lookup.name_contains_matches("offline refresh", provider="FRED")] == ["OFFLINE1"]
+
+
+@pytest.mark.parametrize("journal_mode", ["delete", "wal"])
+def test_reads_never_invalidate_the_snapshot(catalog, journal_mode) -> None:
+    catalog._get_connection().execute(f"PRAGMA journal_mode={journal_mode}")
+    lookup = IndicatorLookup(db=catalog)
+    lookup.exact_name_matches(["Gross Domestic Product"], provider="FRED")
+    state = lookup._catalog_state
+    version = lookup.catalog_version()
+    for names, provider in _PROBES:
+        lookup.exact_name_matches(names, provider=provider)
+        lookup.search(names[0], provider=provider)
+    lookup.name_contains_matches("domestic product", provider="FRED")
+    assert lookup._catalog_state is state
+    assert lookup.catalog_version() == version
+
+
+def test_catalog_version_tracks_in_process_writes(catalog) -> None:
+    lookup = IndicatorLookup(db=catalog)
+    version = lookup.catalog_version()
+    assert isinstance(version, str)
+    assert lookup.catalog_version() == version
+    catalog.insert_indicator(Indicator(provider="FRED", code="NEW2", name="Another Title", popularity=1))
+    assert lookup.catalog_version() != version
+
+
+def test_write_during_lookup_never_files_stale_rows_under_new_snapshot(catalog, monkeypatch) -> None:
+    lookup = IndicatorLookup(db=catalog)
+    real_uncached = lookup._exact_name_matches_uncached
+
+    def _uncached_then_concurrent_write(names, provider=None, limit=20):
+        rows = real_uncached(names, provider, limit)  # computed pre-write
+        catalog.insert_indicator(
+            Indicator(provider="FRED", code="RACE1", name="Race Title", popularity=1)
+        )
+        return rows
+
+    monkeypatch.setattr(lookup, "_exact_name_matches_uncached", _uncached_then_concurrent_write)
+    assert lookup.exact_name_matches(["Race Title"], provider="FRED") == []
+    monkeypatch.setattr(lookup, "_exact_name_matches_uncached", real_uncached)
+    assert [row["code"] for row in lookup.exact_name_matches(["Race Title"], provider="FRED")] == ["RACE1"]
+
+
+def test_failed_search_is_not_memoized() -> None:
+    calls: list[str] = []
+
+    class _FlakyDB:
+        catalog_generation = 0
+        search_failures = 0
+
+        def search(self, query, provider=None, category=None, limit=20):
+            calls.append(query)
+            if len(calls) == 1:
+                # IndicatorDatabase.search() swallows errors into [] and
+                # counts them; a transient failure must cost one request only.
+                self.search_failures += 1
+                return []
+            return [{"provider": "FRED", "code": "GDP", "name": "Gross Domestic Product", "relevance": -5.0}]
+
+    lookup = IndicatorLookup(db=_FlakyDB())
+    assert lookup.search("gross domestic product", provider="FRED") == []
+    assert [row["code"] for row in lookup.search("gross domestic product", provider="FRED")] == ["GDP"]
+    assert [row["code"] for row in lookup.search("gross domestic product", provider="FRED")] == ["GDP"]
+    assert len(calls) == 2
+
+
+def test_database_search_counts_swallowed_errors(catalog) -> None:
+    before = catalog.search_failures
+    catalog._get_connection().execute("DROP TABLE indicators_fts")
+    assert catalog.search("gross domestic product", provider="FRED") == []
+    assert catalog.search_failures == before + 1
+
+
+def test_memo_is_bounded_by_payload_bytes(monkeypatch) -> None:
+    class _DB:
+        catalog_generation = 0
+
+        def search(self, query, provider=None, category=None, limit=20):
+            return [{"provider": "FRED", "code": query.upper(), "name": query, "description": "d" * 1000}]
+
+    probe = IndicatorLookup(db=_DB())
+    probe.search("q00")
+    entry_size = next(iter(probe._catalog_state["memo"].values()))[0]
+    # Ten same-sized entries fit; each is far below the 1/8 single-entry cap.
+    monkeypatch.setattr(indicator_database, "_LOOKUP_MEMO_MAX_BYTES", entry_size * 10)
+
+    lookup = IndicatorLookup(db=_DB())
+    for index in range(12):
+        lookup.search(f"q{index:02d}")
+    state = lookup._catalog_state
+    assert len(state["memo"]) == 10
+    assert state["memo_bytes"] == entry_size * 10
+    assert [key[1] for key in state["memo"]][:2] == ["q02", "q03"]  # LRU evicted q00, q01
+
+    # A single result too large to share the budget is served, not memoized.
+    big_query = "q" + "x" * (entry_size * 2)
+    assert lookup.search(big_query)
+    assert all(key[1] != big_query for key in state["memo"])
+    assert state["memo_bytes"] <= indicator_database._LOOKUP_MEMO_MAX_BYTES
+
+
+# ---------------------------------------------------------------------------
+# FRED substring probe (find_exact_provider_title_match FTS-miss fallback)
+# ---------------------------------------------------------------------------
+
+def legacy_name_contains(conn: sqlite3.Connection, provider: str, needle: str) -> list[tuple[Any, ...]]:
+    """The statement indicator_resolution ran before name_contains_matches."""
+    return [
+        (row["provider"], row["code"], row["name"])
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM indicators
+            WHERE provider = ?
+              AND lower(name) LIKE ?
+            ORDER BY COALESCE(popularity, 0) DESC, code
+            LIMIT 20
+            """,
+            (provider, f"%{needle}%"),
+        )
+    ]
+
+
+_SUBSTRING_NEEDLES = [
+    "gross domestic product",
+    "domestic product",
+    "m1",
+    "m1 for republic of korea",
+    "rate",
+    "consumer price index for all urban consumers",
+    "product\t",
+    "gross  domestic",
+    "no such words",
+    # LIKE wildcards / edge spaces: must keep the original lower(name) form.
+    " gross domestic",
+    "gross domestic product ",
+    "gross_domestic",
+    "m1%korea",
+    "%",
+    "_",
+]
+
+
+@pytest.fixture()
+def substring_catalog(catalog):
+    catalog.insert_batch(
+        [
+            Indicator(provider="FRED", code="LEADSP", name="  gross domestic product, leading", popularity=7),
+            Indicator(provider="FRED", code="UNDER", name="Gross_Domestic index", popularity=6),
+            Indicator(provider="FRED", code="PCT", name="M1 100% for Korea", popularity=6),
+            Indicator(provider="FRED", code="TRAIL", name="Real gross domestic product  ", popularity=8),
+        ]
+    )
+    return catalog
+
+
+def test_name_contains_matches_identical_to_legacy_like_scan(substring_catalog) -> None:
+    lookup = IndicatorLookup(db=substring_catalog)
+    conn = substring_catalog._get_connection()
+    nonempty = 0
+    for needle in _SUBSTRING_NEEDLES:
+        for spelling in ("FRED", "fred"):
+            expected = legacy_name_contains(conn, "FRED", needle)
+            actual = _summary(lookup.name_contains_matches(needle, provider=spelling))
+            assert actual == expected, (needle, spelling)
+        nonempty += bool(expected)
+    assert nonempty >= 10
+    assert lookup.name_contains_matches("gross domestic product", provider="NoSuchProvider") == []
+    assert lookup.name_contains_matches("", provider="FRED") == []
+
+
+def test_name_contains_matches_reads_indexed_expression_and_memoizes(substring_catalog) -> None:
+    lookup = IndicatorLookup(db=substring_catalog)
+    lookup.name_contains_matches("warm up", provider="FRED")  # provider spellings
+    conn = substring_catalog._get_connection()
+    statements = _traced_statements(substring_catalog)
+    rows = lookup.name_contains_matches("domestic product", provider="FRED")
+    conn.set_trace_callback(None)
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 1 and "lower(trim(name)) LIKE" in selects[0], selects
+    plan = " ; ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + selects[0]))
+    assert "USING INDEX idx_provider_lower_name" in plan or "USING COVERING INDEX idx_provider_lower_name" in plan, plan
+    rows[0]["code"] = "MUTATED"
+    statements = _traced_statements(substring_catalog)
+    again = lookup.name_contains_matches("domestic product", provider="FRED")
+    conn.set_trace_callback(None)
+    assert statements == []
+    assert again[0]["code"] != "MUTATED"
 
 
 def test_search_memo_hit_skips_fts_and_returns_copies() -> None:
