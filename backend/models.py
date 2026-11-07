@@ -89,6 +89,10 @@ class NormalizedData(BaseModel):
     data: List[DataPoint]
 
 
+# Contract enum for ParsedIntent.queryType (see SimplifiedPrompt output schema).
+_QUERY_TYPES = frozenset({"data_fetch", "informational", "analysis", "comparison"})
+
+
 class ParsedIntent(BaseModel):
     apiProvider: str
     indicators: List[str]
@@ -131,6 +135,18 @@ class ParsedIntent(BaseModel):
     decompositionType: Optional[str] = None  # "provinces", "states", "regions", "countries"
     decompositionEntities: Optional[List[str]] = None  # e.g., ["Ontario", "Quebec", "BC", ...]
     useProMode: Optional[bool] = False  # Auto-switch to Pro Mode for complex aggregations
+
+    @field_validator('queryType', mode='before')
+    @classmethod
+    def normalize_query_type(cls, v):
+        # Structural normalization of the LLM's routing label. queryType is
+        # parsed in Instructor JSON mode (no decode-time enum), so a strict
+        # Literal would turn a stray value (mixed case, "ranking", null) into
+        # retries or a failed parse on a DATA query. Case/whitespace are
+        # normalized; anything missing or outside the contract enum takes the
+        # data path. No keyword guess ever substitutes for the label.
+        normalized = str(v or "").strip().lower()
+        return normalized if normalized in _QUERY_TYPES else "data_fetch"
 
     @field_validator('recommendedChartType', mode='before')
     @classmethod

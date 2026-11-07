@@ -161,8 +161,6 @@ from ..services.indicator_clarification import (
     collect_indicator_choice_options as _ic_collect_indicator_choice_options,
     infer_query_concept_groups as _ic_infer_query_concept_groups,
     build_multi_concept_query_clarification as _ic_build_multi_concept_query_clarification,
-    is_simple_single_country_query as _ic_is_simple_single_country_query,
-    looks_informational as _ic_looks_informational,
     handle_informational_intent as _ic_handle_informational_intent,
     _DefinitionSentinel as _ic_DefinitionSentinel,
     format_informational_results as _ic_format_informational_results,
@@ -1456,16 +1454,6 @@ class QueryService:
     ) -> Optional[QueryResponse]:
         """Delegates to :func:`indicator_clarification.build_multi_concept_query_clarification`."""
         return _ic_build_multi_concept_query_clarification(self, conversation_id, query, intent, is_multi_indicator, processing_steps)
-
-    @staticmethod
-    def _is_simple_single_country_query(query: str) -> bool:
-        """Delegates to :func:`indicator_clarification.is_simple_single_country_query`."""
-        return _ic_is_simple_single_country_query(query)
-
-    @staticmethod
-    def _looks_informational(query: str) -> bool:
-        """Delegates to :func:`indicator_clarification.looks_informational`."""
-        return _ic_looks_informational(query)
 
     def _handle_informational_intent(
         self,
@@ -5226,14 +5214,12 @@ class QueryService:
                     except Exception as _llm_err:
                         logger.warning("LLM delta extraction error: %s", _llm_err)
 
-            # ── Pre-LLM informational detection (first-turn) ──────────
-            # When there's no conversation state, the combined classifier is
-            # skipped entirely so _query_type stays None.  Catch informational
-            # queries here so they don't fall through to the full LLM parse
-            # pipeline which would try indicator search instead of answering.
-            if _query_type is None and self._looks_informational(query):
-                _query_type = "informational"
-                logger.info("📖 Pre-LLM heuristic → informational for: %s", query[:60])
+            # First turns (no conversation state) leave _query_type None and go
+            # to the main LLM parse, which classifies queryType in the same
+            # call — informational vs data is a semantic decision owned by the
+            # LLM, never by a pre-parse keyword gate (a question-word x
+            # metadata-word heuristic used to answer fetch-shaped asks such as
+            # "list GDP data of G7 countries 2020-2024" with a text menu).
 
             # ── Dispatch: Pro Mode ──────────────────────────────────────
             if _query_type == "pro_mode" and auto_pro_mode:
@@ -5975,16 +5961,11 @@ class QueryService:
             self._maybe_promote_statscan_axis_decomposition_from_query(query, intent)
 
             # Route informational queries — the LLM classified queryType as
-            # part of intent extraction (same API call, zero cost).
+            # part of intent extraction (same API call, zero cost). The parsed
+            # queryType is authoritative: ParsedIntent normalizes a missing or
+            # off-enum value to "data_fetch" (structural default), and no
+            # keyword rule may override it in either direction.
             _qt = str(intent.queryType or "").strip().lower()
-            # Fallback: if the heuristic detected informational but the LLM
-            # didn't classify it as such, override.  The heuristic has high
-            # precision (question word + metadata word) so false positives
-            # are rare, while local LLMs sometimes miss the queryType field.
-            if _qt != "informational" and self._looks_informational(query):
-                logger.info("📖 Heuristic override: queryType %r → informational for: %s", _qt, query[:60])
-                _qt = "informational"
-                intent.queryType = "informational"
             if _qt == "informational":
                 logger.info("📖 LLM classified query as informational: %s", query)
                 informational_response = self._handle_informational_intent(

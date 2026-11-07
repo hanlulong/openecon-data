@@ -1832,56 +1832,6 @@ def build_multi_concept_query_clarification(
 # Informational / Metadata Query Handling
 # ====================================================================
 
-def is_simple_single_country_query(query: str) -> bool:
-    """Detect simple single-country macro queries."""
-    q = str(query or "").lower()
-    countries = CountryResolver.detect_all_countries_in_query(query)
-    if len(countries) != 1:
-        return False
-    macro_terms = {
-        "gdp", "unemployment", "inflation", "cpi", "population",
-        "labor force", "labour force", "employment rate",
-        "interest rate", "government debt", "trade balance",
-    }
-    return any(term in q for term in macro_terms)
-
-
-def looks_informational(query: str) -> bool:
-    """Lightweight pre-LLM check for probable informational queries."""
-    q = str(query or "").lower()
-    question_words = {
-        "what", "which", "list", "does", "browse", "search",
-        "available", "show me", "have", "offer", "cover",
-    }
-    metadata_words = {
-        "series", "indicators", "indicator", "datasets", "metrics",
-        "providers", "data", "sources", "variables", "measures",
-    }
-    words = set(q.split())
-    has_question = bool(words & question_words)
-    has_metadata = bool(words & metadata_words)
-    if has_question and has_metadata:
-        fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
-        pure_metadata = words & metadata_words
-        if pure_metadata == {"data"} and (words & fetch_signals):
-            return False
-        return True
-
-    # ── Additional phrase-level patterns ───────────────────────────
-    # Catch "how many indicators", "what data sources", etc. that the
-    # simple word-intersection approach above might miss.
-    informational_phrases = [
-        "how many indicators", "how many series", "how many datasets",
-        "how many variables", "data source", "data provider",
-        "what databases", "which providers", "which sources",
-        "where do you get", "where does the data",
-    ]
-    if any(p in q for p in informational_phrases):
-        return True
-
-    return False
-
-
 def _classify_informational_subtype(query: str) -> str:
     """Classify an informational query into a sub-type for dispatch.
 

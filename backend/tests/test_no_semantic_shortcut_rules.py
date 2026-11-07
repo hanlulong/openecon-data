@@ -62,6 +62,11 @@ FORBIDDEN_RUNTIME_MARKERS = [
     "Catalog lookup:",
     "Catalog match:",
     'match_type="catalog"',
+    # Keyword rule that answered first turns before the LLM parse and
+    # overrode the parsed queryType (informational vs data is the LLM's call).
+    "Heuristic override: queryType",
+    "Pre-LLM heuristic",
+    "looks_informational(",
 ]
 
 
