@@ -66,6 +66,7 @@ class ExportService:
                     self._slug(series.metadata.indicator),
                 ]
                 column_names.append("_".join(filter(None, parts)) or "series")
+            column_names = self._unique_column_names(column_names)
 
             writer = csv.DictWriter(
                 buffer,
@@ -124,9 +125,10 @@ class ExportService:
                     self._slug(series.metadata.country),
                     self._slug(series.metadata.indicator),
                 ]
-                # Stata variable names have max 32 chars
-                column_names.append(("_".join(filter(None, parts)) or "series")[:32])
+                column_names.append("_".join(filter(None, parts)) or "series")
                 series_maps.append({dp.date: dp.value for dp in series.data})
+            # Stata variable names have max 32 chars
+            column_names = self._unique_column_names(column_names, max_length=32)
 
             rows = []
             for date in all_dates:
@@ -181,6 +183,31 @@ class ExportService:
         if text and text.lstrip("\t\r")[:1] in ("=", "+", "-", "@"):
             return "'" + text
         return text
+
+    @staticmethod
+    def _unique_column_names(bases: List[str], max_length: Optional[int] = None) -> List[str]:
+        """Return one distinct column name per series, in order.
+
+        Each name is its base (truncated to ``max_length``). Only a name that
+        collides with an earlier one, or with the ``date`` column, gets a
+        ``_2``, ``_3``, ... suffix, trimming the base so the result still fits
+        ``max_length``. Without this, two series with the same slug (or the
+        same first 32 characters in Stata) shared one dict key and the
+        earlier series was silently dropped.
+        """
+        used = {"date"}
+        names: List[str] = []
+        for base in bases:
+            name = base[:max_length] if max_length else base
+            counter = 2
+            while name in used:
+                suffix = f"_{counter}"
+                stem = base[: max_length - len(suffix)] if max_length else base
+                name = f"{stem}{suffix}"
+                counter += 1
+            used.add(name)
+            names.append(name)
+        return names
 
     @staticmethod
     def _slug(value: Optional[str], limit: Optional[int] = None) -> str:
