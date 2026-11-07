@@ -595,6 +595,117 @@ describe('MessageChart', () => {
     });
   });
 
+  // The header states the span the RETURNED points cover, so a window that is
+  // shorter or staler than requested is visible without reading the chart.
+  describe('covered range in series header', () => {
+    const withData = (
+      frequency: string,
+      points: Array<{ date: string; value: number | null }>,
+      extra: Record<string, string> = {},
+    ): NormalizedData[] => [
+      {
+        metadata: {
+          source: 'FRED',
+          indicator: 'Consumer Price Index',
+          country: 'US',
+          frequency,
+          unit: 'Index',
+          lastUpdated: '2026-11-01',
+          ...extra,
+        },
+        data: points,
+      },
+    ];
+    const header = () => document.querySelector('.series-header')?.textContent ?? '';
+
+    it('shows monthly first/last returned dates, ignoring full-series metadata coverage', () => {
+      render(
+        <MessageChart
+          data={withData(
+            'monthly',
+            [
+              // Unsorted on purpose; range must still be min..max.
+              { date: '2026-10-01', value: 115.3 },
+              { date: '2021-11-01', value: 110.1 },
+              { date: '2024-05-01', value: 113.0 },
+            ],
+            // FRED-style full-series availability must NOT be shown.
+            { startDate: '1947-01-01', endDate: '2026-10-01' },
+          )}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).toContain('Nov 2021 – Oct 2026');
+      expect(header()).not.toContain('1947');
+    });
+
+    it('excludes trailing null observations so a stale end is visible', () => {
+      render(
+        <MessageChart
+          data={withData('annual', [
+            { date: '2019-01-01', value: 1.2 },
+            { date: '2020-01-01', value: 1.4 },
+            { date: '2021-01-01', value: 1.9 },
+            { date: '2022-01-01', value: null },
+            { date: '2023-01-01', value: null },
+          ])}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).toContain('2019 – 2021');
+      expect(header()).not.toContain('2023');
+    });
+
+    it('formats quarterly and daily endpoints at their own frequency', () => {
+      const { unmount } = render(
+        <MessageChart
+          data={withData('quarterly', [
+            { date: '2023-01-01', value: 1 },
+            { date: '2023-04-01', value: 2 },
+            { date: '2024-07-01', value: 3 },
+            { date: '2024-10-01', value: 4 },
+          ])}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).toContain('2023-Q1 – 2024-Q4');
+      unmount();
+
+      render(
+        <MessageChart
+          data={withData('daily', [
+            { date: '2026-11-02', value: 4.1 },
+            { date: '2026-11-03', value: 4.2 },
+            { date: '2026-11-04', value: 4.0 },
+            { date: '2026-11-05', value: 4.3 },
+          ])}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).toContain('Nov 2, 2026 – Nov 5, 2026');
+    });
+
+    it('omits the range for categorical (currency-code) rows', () => {
+      render(
+        <MessageChart
+          data={mockExchangeRateData}
+          chartType="table"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(header()).not.toContain('–');
+    });
+  });
+
   // Line charts encode value by POSITION, so the axis must fit the data range
   // (a 0 baseline flattens index-level series such as CPI ~113-115 into a
   // straight line). Bars encode value by LENGTH and keep the zero baseline.

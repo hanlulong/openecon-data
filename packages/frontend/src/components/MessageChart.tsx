@@ -337,6 +337,46 @@ function formatXAxisTick(dateStr: string, frequency?: string): string {
   return dateStr.substring(0, 10)
 }
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const ISO_DATE_PREFIX = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/
+
+// One endpoint of a covered range, at the series' frequency (or, when the
+// frequency is unknown, at the precision the date string itself carries).
+// Parsed from the string, never via Date(), so no timezone shift can move
+// "2021-11-01" into October.
+function formatRangeEndpoint(dateStr: string, frequency?: string): string {
+  const match = ISO_DATE_PREFIX.exec(dateStr)
+  if (!match) return dateStr
+  const [, year, month, day] = match
+  const freq = (frequency || '').toLowerCase()
+  if (freq === 'annual' || freq === 'yearly' || !month) return year
+  if (freq === 'quarterly' || freq === 'quarter') return formatXAxisTick(dateStr, frequency)
+  const monthName = MONTH_ABBR[parseInt(month, 10) - 1]
+  if (!monthName) return dateStr
+  if (freq === 'monthly' || freq === 'month' || !day) return `${monthName} ${year}`
+  return `${monthName} ${parseInt(day, 10)}, ${year}`
+}
+
+// The span the RETURNED observations actually cover (first..last date with a
+// value). Deliberately NOT metadata.startDate/endDate: for some providers
+// (e.g. FRED) those describe the full series' availability, not this
+// response, so they would hide a window that is shorter or staler than asked.
+function formatCoveredRange(points: NormalizedData['data'], frequency?: string): string {
+  let first: string | null = null
+  let last: string | null = null
+  for (const point of points) {
+    if (point.value === null || !Number.isFinite(point.value)) continue
+    if (typeof point.date !== 'string' || !ISO_DATE_PREFIX.test(point.date)) continue
+    // ISO dates of the same shape order lexicographically.
+    if (first === null || point.date < first) first = point.date
+    if (last === null || point.date > last) last = point.date
+  }
+  if (first === null || last === null) return ''
+  const start = formatRangeEndpoint(first, frequency)
+  const end = formatRangeEndpoint(last, frequency)
+  return start === end ? start : `${start} – ${end}`
+}
+
 function formatSimpleDateTime(dateTimeStr: string): string {
   try {
     // Parse format like "Sun, 19 Oct 2025 00:02:31 +0000"
@@ -825,6 +865,8 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             const showFrequency = frequency && !isInfoRedundant(indicator, frequency);
             const showUnit = unit && !isUnitRedundant(unit, frequency, dataType, indicator);
             const showDataTypeBadge = dataType && !isInfoRedundant(indicator, dataType) && !isInfoRedundant(unit, dataType);
+            // Categorical/currency-code "dates" are not a time axis.
+            const coveredRange = isExchangeRateData ? '' : formatCoveredRange(series.data, frequency);
 
             return (
               <li key={`${series.metadata.indicator}-${index}`} className="series-item">
@@ -832,6 +874,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
                   <strong>{series.metadata.country || series.metadata.indicator}</strong>
                   {series.metadata.indicator && series.metadata.country ? ` - ${series.metadata.indicator}` : ''}
                   {' '}({series.data.length} observations)
+                  {coveredRange ? ` • ${coveredRange}` : ''}
                   {showFrequency ? ` • ${frequency}` : ''}
                   {showUnit ? ` • ${unit}` : ''}
                   {isExchangeRateData && series.metadata.lastUpdated ? ` • as of ${formatSimpleDateTime(series.metadata.lastUpdated)}` : ''}
