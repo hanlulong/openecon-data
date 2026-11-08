@@ -59,11 +59,15 @@ def structured_indicator_label(
 
     1. ``__semantic_indicator_label`` is semantic BY CONSTRUCTION (merged
        conversation state / LLM indicator text): an acronym concept such as
-       "GDP"/"CPI"/"PMI" is kept as-is. Only when the indicator DB actually
-       knows that exact token as a code for this provider is it replaced —
-       by a non-code concept phrase among the parsed indicators when there is
+       "GDP"/"CPI"/"PMI" is kept as-is. It is treated as a series id only
+       when there is structural evidence that it IS one: the indicator DB
+       knows that exact token as a code for this provider, or the label is
+       the very token carried in ``params['indicator']`` (state persisted the
+       typed code as both label and code). A series-id label is replaced by
+       a non-code concept phrase among the parsed indicators when there is
        one, else by the catalog NAME (a carried "UNRATE"/"BAMLH0A0HYM2"
-       becomes its title).
+       becomes its title); on a follow-up a series id with no catalog name
+       yields "" (never "Japan UNRATE").
     2. Otherwise the indicator token, whose code shape is checked: a bare
        provider code becomes its catalog name. On a follow-up an unknown bare
        code yields "" (never "Japan UNRATE"), and the display label — which
@@ -86,7 +90,12 @@ def structured_indicator_label(
         if not _looks_like_provider_code(semantic):
             return semantic
         semantic_title = _catalog_name_for_code(provider, semantic)
-        if not semantic_title:
+        # Token identity, not shape: a label that IS the carried code token
+        # is a series id even when the catalog cannot name it (an uncatalogued
+        # typed code, or the DB briefly unavailable); a label that differs
+        # from the carried code ("CPI" over CPIAUCSL) is the user's concept.
+        label_is_carried_code = semantic.lower() == _clean(params.get("indicator")).lower()
+        if not semantic_title and not label_is_carried_code:
             return semantic
         # The label is a real provider code (state persisted from a turn where
         # the user typed the id). A concept phrase the parser gave for this
@@ -96,7 +105,9 @@ def structured_indicator_label(
             text = _clean(candidate)
             if text and text.lower() not in raw_texts and not _looks_like_provider_code(text):
                 return text
-        return semantic_title
+        if semantic_title:
+            return semantic_title
+        return "" if follow_up else semantic
 
     candidates = [] if follow_up else [params.get("__display_indicator_label")]
     candidates += [indicators[0] if indicators else "", params.get("indicator")]

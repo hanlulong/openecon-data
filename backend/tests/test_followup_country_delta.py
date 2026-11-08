@@ -251,6 +251,71 @@ class FredDiscoveryInvariantTests(unittest.TestCase):
         self.assertIsNone(_normalize_known_country_to_iso2("1W"))
 
 
+class FredFollowUpConceptChainTests(unittest.TestCase):
+    """Release re-verification of the ONE follow-up concept chain (integrated
+    FCD + MRTF): materialized turn-2 intents, graded on concept + country.
+
+    * acronym labels (GDP/CPI/PMI) keep follow-up discovery working, whether
+      or not the carried code is catalogued;
+    * a code-shaped label is a series id only on structural evidence (the
+      catalog knows the token, or it IS the carried code token) -- an
+      uncatalogued one never yields "<Country> <CODE>" search text;
+    * the raw delta utterance is never searched.
+    """
+
+    _CATALOG = {"UNRATE": "Unemployment Rate", "GDP": "Gross Domestic Product"}
+
+    def _search_text(self, label: str, code: str, utterance: str, iso2: str, catalog: dict[str, str]) -> str:
+        _, intent = _turn2_intent(label, code, utterance, added=[iso2])
+        params = dict(intent.parameters, __original_query=utterance)
+        intent.originalQuery = utterance
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False), \
+                patch.object(follow_up_retrieval, "_catalog_name_for_code",
+                             side_effect=lambda _provider, token: catalog.get(token, "")):
+            prepared = _prepare_fred_country_scope_params({}, params, intent)
+        return str(prepared.get("__fred_discovery_query") or "")
+
+    def test_acronym_labels_keep_follow_up_discovery(self) -> None:
+        for catalog in (self._CATALOG, {}):
+            for label, code, utterance, iso2 in (
+                ("GDP", "GDPC1", "和日本比较", "JP"),
+                ("GDP", "GDPC1", "compare with Japan", "JP"),
+                ("CPI", "CPIAUCSL", "compare with Canada", "CA"),
+                ("PMI", "MANEMP", "那日本呢", "JP"),
+            ):
+                with self.subTest(label=label, utterance=utterance, catalog=bool(catalog)):
+                    text = self._search_text(label, code, utterance, iso2, catalog)
+                    self.assertTrue(_text_targets_country(text, iso2), text)
+                    # The concept: the acronym itself, or the catalog title
+                    # when the acronym is also a catalogued FRED code ("GDP").
+                    self.assertIn(catalog.get(label) or label, text)
+                    self.assertNotIn(utterance, text)
+                    self.assertNotIn(code, text.split())
+
+    def test_catalogued_code_label_searches_its_title(self) -> None:
+        # "US GDP" persisted with the FRED series GDP as both label and code.
+        text = self._search_text("GDP", "GDP", "和日本比较", "JP", self._CATALOG)
+        self.assertEqual(text, "Japan Gross Domestic Product")
+        text = self._search_text("UNRATE", "UNRATE", "compare with Canada", "CA", self._CATALOG)
+        self.assertEqual(text, "Canada Unemployment Rate")
+
+    def test_uncatalogued_code_label_never_searches_country_plus_code(self) -> None:
+        for label, utterance, iso2, catalog in (
+            ("XQZW123", "compare with Japan", "JP", self._CATALOG),  # typed, uncatalogued
+            ("UNRATE", "compare with Japan", "JP", {}),                # catalog unavailable
+            ("UNRATE", "再加上英国", "GB", {}),
+        ):
+            with self.subTest(label=label, utterance=utterance, catalog=bool(catalog)):
+                self.assertEqual(self._search_text(label, label, utterance, iso2, catalog), "")
+
+    def test_raw_utterance_label_is_never_searched(self) -> None:
+        for utterance in ("compare with Canada", "和加拿大比较"):
+            with self.subTest(utterance=utterance):
+                text = self._search_text(utterance, "UNRATE", utterance, "CA", self._CATALOG)
+                self.assertNotIn(utterance, text)
+                self.assertEqual(text, "Canada Unemployment Rate")
+
+
 class FredFollowUpFetchTests(unittest.TestCase):
     """Turn-2 fetch through the real _fetch_data + coverage + persistence."""
 
@@ -598,12 +663,14 @@ class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
         # Combined chain (follow_up_retrieval.structured_indicator_label): a
         # bare code the catalog does not know yields no discovery; a
         # catalog-known code (as the semantic label or the indicator) is
-        # searched by its TITLE + country.  An unknown code-shaped SEMANTIC
-        # label is kept as an acronym concept ("CPI"/"PMI"), so that subcase
-        # is only meaningful with the catalog-known code.
+        # searched by its TITLE + country.  A code-shaped SEMANTIC label that
+        # IS the carried indicator token is a series id even when the catalog
+        # cannot name it (no "Canada UNRATE"); one that differs from the
+        # carried code stays an acronym concept (see
+        # FredFollowUpConceptChainTests).
         for params_extra, indicators, unknown_has_no_discovery in (
             ({"__display_indicator_label": "compare with Canada"}, ["UNRATE"], True),
-            ({"__semantic_indicator_label": "UNRATE"}, ["UNRATE"], False),
+            ({"__semantic_indicator_label": "UNRATE"}, ["UNRATE"], True),
         ):
             with self.subTest(params_extra=params_extra):
                 intent = ParsedIntent(
