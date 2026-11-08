@@ -29,6 +29,16 @@ from ..utils.retry import ProviderCoolingDown, ProviderUnavailable
 logger = logging.getLogger(__name__)
 
 
+def _comtrade_freq_code(frequency: Optional[str]) -> str:
+    """Comtrade freqCode for a frequency label (same mapping fetch_trade_data uses)."""
+    freq_lower = str(frequency or "").lower()
+    if freq_lower in ["monthly", "month", "m"]:
+        return "M"
+    if freq_lower in ["quarterly", "quarter", "q"]:
+        return "Q"
+    return "A"
+
+
 def _comtrade_period_to_iso(period) -> str:
     """Convert a Comtrade period token to an ISO date.
 
@@ -1279,14 +1289,8 @@ class ComtradeProvider(BaseProvider):
         start = start_year or now.year - 5
         end = end_year or now.year - 1
 
-        # Determine frequency code for API
-        freq_lower = frequency.lower()
-        if freq_lower in ["monthly", "month", "m"]:
-            freq_code = "M"
-        elif freq_lower in ["quarterly", "quarter", "q"]:
-            freq_code = "Q"
-        else:
-            freq_code = "A"  # Annual is default
+        # Determine frequency code for API (annual is the default)
+        freq_code = _comtrade_freq_code(frequency)
 
         # Cap only STRUCTURALLY impossible periods: an annual total cannot
         # exist for the year still in progress, a quarter cannot lie beyond
@@ -1508,6 +1512,16 @@ class ComtradeProvider(BaseProvider):
         return merged_results
 
     @staticmethod
+    def _period_label(date_text: str, freq_code: str) -> str:
+        """Display label of one Comtrade observation date (2025 / 2025-Q3 / 2025-07)."""
+        date_text = str(date_text or "")
+        if freq_code == "A":
+            return date_text[:4]
+        if freq_code == "Q" and re.match(r"\d{4}-\d{2}", date_text):
+            return f"{date_text[:4]}-Q{(int(date_text[5:7]) - 1) // 3 + 1}"
+        return date_text[:7]
+
+    @staticmethod
     def _disclose_unreported_trailing_years(
         series_list: List[NormalizedData],
         start: int,
@@ -1532,11 +1546,7 @@ class ComtradeProvider(BaseProvider):
         label = {"A": "annual", "Q": "quarterly", "M": "monthly"}.get(freq_code, "")
 
         def period_label(date_text: str) -> str:
-            if freq_code == "A":
-                return date_text[:4]
-            if freq_code == "Q" and re.match(r"\d{4}-\d{2}", date_text):
-                return f"{date_text[:4]}-Q{(int(date_text[5:7]) - 1) // 3 + 1}"
-            return date_text[:7]
+            return ComtradeProvider._period_label(date_text, freq_code)
 
         gaps: Dict[Tuple[str, str], List[NormalizedData]] = {}
         for series in series_list or []:
@@ -1627,6 +1637,66 @@ class ComtradeProvider(BaseProvider):
                     continue
                 summed[str(date)] = summed.get(str(date), 0.0) + (value or 0)
         return summed, member_count
+
+    @staticmethod
+    def _member_period_coverage(series_list: List[NormalizedData]) -> Dict[str, int]:
+        """Per date, how many member series OBSERVED a value (None excluded).
+
+        The structural count behind 'only sum periods present': a period
+        summed over fewer members than the others is smaller by construction.
+        """
+        coverage: Dict[str, int] = {}
+        for series in series_list or []:
+            seen: set = set()
+            for point in (series.data if series else None) or []:
+                if isinstance(point, dict):
+                    date, value = point.get("date"), point.get("value")
+                else:
+                    date, value = getattr(point, "date", None), getattr(point, "value", None)
+                if date and value is not None and str(date) not in seen:
+                    seen.add(str(date))
+                    coverage[str(date)] = coverage.get(str(date), 0) + 1
+        return coverage
+
+    @staticmethod
+    def _partial_period_coverage_note(
+        export_coverage: Dict[str, int],
+        import_coverage: Dict[str, int],
+        freq_code: str,
+        max_listed: int = 6,
+    ) -> Optional[str]:
+        """Disclose periods whose total sums fewer members than the others.
+
+        A period's balance needs both flows, so its coverage is the smaller of
+        the export and import member counts. The reference is the best-covered
+        period (members that file at all; members that returned nothing are
+        the separate 'Partial coverage: N of M' note). Members file on their
+        own schedules, so a trailing year typically sums only the early
+        filers — a jump that is an artifact of coverage, not trade.
+        """
+        dates = set(export_coverage) | set(import_coverage)
+        coverage = {
+            date: min(export_coverage.get(date, 0), import_coverage.get(date, 0))
+            for date in dates
+        }
+        if not coverage:
+            return None
+        full = max(coverage.values())
+        partial = sorted(date for date, count in coverage.items() if count < full)
+        if full < 2 or not partial:
+            return None
+        listed = [
+            f"{ComtradeProvider._period_label(date, freq_code)} ({coverage[date]} of {full})"
+            for date in partial[:max_listed]
+        ]
+        more = len(partial) - len(listed)
+        periods = ", ".join(listed) + (f", and {more} more period(s)" if more > 0 else "")
+        return (
+            f"Partial member coverage in {periods}: those periods sum fewer "
+            f"member series (reporting both flows) than the {full} in the "
+            "best-covered periods, so their totals are lower by construction "
+            "and not comparable with the rest of the series."
+        )
 
     async def fetch_trade_balance(
         self,
@@ -1790,6 +1860,16 @@ class ComtradeProvider(BaseProvider):
                         "expected member series returned data; members without "
                         "data are absent from these totals."
                     )
+            # Per-PERIOD coverage: members that file later (a trailing year,
+            # a member whose history starts later) leave some periods summed
+            # over fewer members than the rest.
+            period_note = self._partial_period_coverage_note(
+                self._member_period_coverage(exports_data),
+                self._member_period_coverage(imports_data),
+                _comtrade_freq_code(frequency),
+            )
+            if period_note:
+                notes.append(period_note)
         else:
             # Single reporter/partner pair: unchanged behavior.
             exports = exports_data[0] if exports_data else None
@@ -1823,6 +1903,18 @@ class ComtradeProvider(BaseProvider):
             import_value = import_map.get(date, 0)
             balance = export_value - import_value
             balance_points.append({"date": date, "value": balance})
+
+        # The balance is a NEW series, but the disclosures fetch_trade_data
+        # attached to its inputs (e.g. the consolidated trailing-year
+        # "returned no annual rows for 2025 from ..." notes) still describe
+        # it: carry them, once each, after the aggregation notes.
+        carried = [
+            note
+            for series in list(exports_data or []) + list(imports_data or [])
+            for note in ((series.metadata.notes if series and series.metadata else None) or [])
+        ]
+        if carried:
+            notes = list(dict.fromkeys(list(notes or []) + carried))
 
         # Build partner description for metadata
         partner_desc = f" with {partner}" if partner else " (World)"
