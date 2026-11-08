@@ -365,6 +365,128 @@ def test_named_code_lock_never_forces_a_frequency_transform(query, series_id) ->
 
 
 # ---------------------------------------------------------------------------
+# ...but the native-frequency serve is DISCLOSED: every literal-code lock
+# carries the selector's kept-pick frequency provenance, and the one
+# post-fetch reconciliation (data_fetcher._disclose_frequency_mismatch) states
+# the served frequency -- neutrally, because the request side is a raw-text
+# hint ("for the year 2025" reads as annual), never a parse slot.
+# ---------------------------------------------------------------------------
+
+_FREQ = "__frequency_mismatch"
+
+
+@pytest.mark.parametrize(
+    "provider,query,series_id,expected",
+    [
+        ("FRED", "FRED DGS10 monthly 2025 2026", "DGS10", {"requested_frequency": "monthly", "native_frequency": "Daily"}),
+        ("FRED", "FRED series GDP monthly since 2015", "GDP", {"requested_frequency": "monthly", "native_frequency": "Quarterly"}),
+        # Catalog row without a frequency: the SERVED frequency decides post-fetch.
+        ("WORLDBANK", "China GDP NY.GDP.MKTP.CN quarterly", "NY.GDP.MKTP.CN",
+         {"requested_frequency": "quarterly", "native_frequency": ""}),
+        ("FRED", "FRED DGS10 2025", "DGS10", None),                     # no frequency named
+        ("FRED", "CPIAUCSL monthly since 2020", "CPIAUCSL", None),       # catalog agrees
+    ],
+)
+def test_named_code_lock_carries_frequency_provenance(provider, query, series_id, expected) -> None:
+    svc = _svc(lookup_result=("found", {"id": series_id}))
+    intent = _intent(provider, query, ["series"], {"seriesId": series_id})
+    params, _select = _resolve(svc, provider, intent, pick="GS10")
+    assert params.get(_FREQ) == expected
+    # Re-resolution passes (query.py pre-resolve, then fetch_data) re-derive
+    # the same provenance instead of dropping it.
+    again, _ = _resolve(svc, provider, _intent(provider, query, ["series"], params), pick="GS10")
+    assert again.get(_FREQ) == expected
+    # Disclosure only: still no transform.
+    assert "frequency" not in params and "aggregation_method" not in params
+
+
+def test_literal_indicator_slot_lock_carries_the_same_provenance() -> None:
+    intent = _intent("FRED", "DGS10 monthly averages since 2024", ["DGS10"], {"indicator": "DGS10"})
+    params, select = _resolve(_svc(), "FRED", intent, pick="GS10")
+    assert params["indicator"] == "DGS10" and params["__decision_source"] == "exact_code"
+    assert params[_FREQ] == {"requested_frequency": "monthly", "native_frequency": "Daily"}
+    select.assert_not_awaited()
+
+
+def _fetch_svc(cached=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        _MAX_ALTERNATE_CODE_RETRIES=2,
+        _preflight_geographic_split=AsyncMock(return_value=None),
+        _maybe_expand_ranking_country_scope=lambda query, provider, params: params,
+        _resolve_indicator_for_fetch=AsyncMock(side_effect=lambda provider, request, params: params),
+        _get_from_cache=AsyncMock(return_value=cached),
+        _save_to_cache=AsyncMock(),
+        _normalize_bis_metadata_labels=lambda result: None,
+        _looks_like_provider_indicator_code=lambda provider, value: True,
+    )
+
+
+def _daily_dgs10() -> NormalizedData:
+    return NormalizedData(
+        metadata=Metadata(source="FRED", indicator="10-Year Treasury", country="US",
+                          frequency="Daily", unit="Percent", seriesId="DGS10"),
+        data=[{"date": "2025-01-02", "value": 4.57}, {"date": "2025-01-03", "value": 4.6}],
+    )
+
+
+@pytest.mark.parametrize("language, served_label, forbidden", [
+    ("en", "**daily**", ("asked for", "monthly")),
+    ("zh", "**日度**", ("您请求", "月度")),
+])
+def test_named_code_served_at_native_frequency_is_disclosed_on_fresh_and_cached_serves(
+    monkeypatch, language, served_label, forbidden,
+) -> None:
+    svc = _svc(lookup_result=("found", {"id": "DGS10"}))
+    intent = _intent("FRED", "FRED DGS10 monthly 2025", ["10-year treasury"],
+                     {"seriesId": "DGS10", "country": "US"}, language=language)
+    params, _ = _resolve(svc, "FRED", intent, pick="GS10")
+
+    async def _dispatch(_svc, _intent, _plan):
+        return [_daily_dgs10()]
+
+    monkeypatch.setattr(data_fetcher, "fetch_from_provider_dispatch", _dispatch)
+    fresh_svc = _fetch_svc()
+    fresh = asyncio.run(data_fetcher.fetch_data(
+        fresh_svc, _intent("FRED", intent.originalQuery, ["DGS10"], params, language=language)))
+    cached_obj = fresh_svc._save_to_cache.await_args.args[2]
+    hit = asyncio.run(data_fetcher.fetch_data(
+        _fetch_svc(cached=cached_obj), _intent("FRED", intent.originalQuery, ["DGS10"], params, language=language)))
+    for served in (fresh, hit):
+        notes = served[0].metadata.notes or []
+        assert any(served_label in note for note in notes), notes
+        assert not any(word in note for note in notes for word in forbidden), notes
+        assert served[0].metadata.seriesId == "DGS10"
+    assert not (cached_obj.metadata.notes or []), "per-request disclosure must never be cached"
+
+
+def test_both_per_request_disclosures_chain_at_both_fetch_seams(monkeypatch) -> None:
+    """A substituted named code AND a native-frequency serve: both notes, on
+    the fresh return and on a cache hit (the two seams chain
+    _attach_requested_series_disclosure and _disclose_frequency_mismatch)."""
+    params = {
+        "indicator": "DGS10", "country": "US", "__semantic_authority": "llm_adjudication",
+        ir.REQUESTED_SERIES_ID_KEY: "ZZTOP99", ir.REQUESTED_SERIES_ID_STATUS_KEY: "not_found",
+        ir.REQUESTED_SERIES_PROVIDER_KEY: "FRED",
+        _FREQ: {"requested_frequency": "monthly", "native_frequency": "Daily"},
+    }
+
+    async def _dispatch(_svc, _intent, _plan):
+        return [_daily_dgs10()]
+
+    monkeypatch.setattr(data_fetcher, "fetch_from_provider_dispatch", _dispatch)
+    fresh_svc = _fetch_svc()
+    fresh = asyncio.run(data_fetcher.fetch_data(fresh_svc, _intent("FRED", "ZZTOP99 monthly", ["DGS10"], params)))
+    hit = asyncio.run(data_fetcher.fetch_data(
+        _fetch_svc(cached=fresh_svc._save_to_cache.await_args.args[2]),
+        _intent("FRED", "ZZTOP99 monthly", ["DGS10"], params),
+    ))
+    for served in (fresh, hit):
+        notes = served[0].metadata.notes or []
+        assert any("ZZTOP99" in note for note in notes), notes
+        assert any("**daily**" in note for note in notes), notes
+
+
+# ---------------------------------------------------------------------------
 # Dispatch + cache identity for a kept transform suffix
 # ---------------------------------------------------------------------------
 

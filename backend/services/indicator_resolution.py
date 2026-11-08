@@ -2311,6 +2311,36 @@ async def _named_series_code_existence(
     return "unverified", code
 
 
+def _literal_code_frequency_provenance(provider: str, code: str, intent: Any) -> Dict[str, Any]:
+    """Frequency provenance for a user-named code locked as-is (no selection).
+
+    A literal-code lock serves the code at its NATIVE frequency: forcing a
+    provider-native aggregation from raw-text frequency words was removed
+    (a structured parse slot must own any transform). Without a selection the
+    kept-pick annotation never formed, so "FRED DGS10 monthly 2025" served
+    ~250 daily points with no note while the production baseline substituted
+    the monthly sibling. This attaches the SAME requested-frequency evidence
+    the selector annotates its kept picks with (shared
+    ``requested_frequency_conflict``), against the code's catalog frequency;
+    the post-fetch seam (data_fetcher._disclose_frequency_mismatch) compares
+    the SERVED frequency and words an annotation-only request neutrally, so a
+    misread hint can never become a false claim or a data change.
+    {} when the current turn names no frequency or the catalog says it agrees.
+    """
+    from .indicator_selector import FREQUENCY_MISMATCH_PARAM, requested_frequency_conflict
+
+    query = str(getattr(intent, "originalQuery", "") or "")
+    code_text = str(code or "").strip()
+    if not query or not code_text:
+        return {}
+    catalog_provider = _SINGLE_SERIES_CODE_PROVIDERS.get(str(provider or "").upper()) or str(provider or "")
+    entry = _catalog_series_entry(catalog_provider, code_text) if catalog_provider else None
+    conflict = requested_frequency_conflict(
+        query, (entry or {}).get("frequency"), keep_unknown_native=True,
+    )
+    return {FREQUENCY_MISMATCH_PARAM: conflict} if conflict else {}
+
+
 def _canonicalize_series_id_slot(params: dict, canonical_code: str) -> None:
     """Rewrite the seriesId slot's BASE code to the canonical (provider-cased)
     code, keeping any ``:transform`` suffix. Dispatch keeps a seriesId only
@@ -2916,6 +2946,12 @@ async def resolve_indicator_for_fetch(
         # freshly adjudicated pick and must never survive onto another code.
         if "__frequency_mismatch" not in extra:
             merged.pop("__frequency_mismatch", None)
+            # A literal user-named code (every exact_code lock, on every
+            # resolution pass) is served as-is at its NATIVE frequency: carry
+            # the same frequency provenance a kept selector pick carries, so
+            # the one post-fetch reconciliation discloses it.
+            if str(extra.get("__decision_source") or "") == _LITERAL_CODE_DECISION_SOURCE:
+                merged.update(_literal_code_frequency_provenance(provider, indicator_value, intent))
         if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
         # A.3 display carry: preserve the user's ORIGINAL phrasing so display

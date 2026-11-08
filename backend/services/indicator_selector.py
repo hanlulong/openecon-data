@@ -444,6 +444,40 @@ def build_continuity_kwargs(params: Any) -> Dict[str, Any]:
 FREQUENCY_MISMATCH_PARAM = "__frequency_mismatch"
 
 
+def requested_frequency_conflict(
+    query: str,
+    native_frequency: Any,
+    *,
+    keep_unknown_native: bool = False,
+) -> Optional[Dict[str, str]]:
+    """{requested_frequency, native_frequency} when a series' NATIVE frequency
+    differs from the frequency the selector reads from ``query``.
+
+    The one frequency half of the kept-pick annotation, shared by the
+    selector (``_frequency_only_conflict``) and by code locks that bypass
+    selection (a user-named code is served as-is at its native frequency).
+    None when the query names no frequency or the native one agrees; an
+    unknown native frequency is no conflict unless ``keep_unknown_native``
+    (a lock whose catalog row has no frequency leaves the decision to the
+    post-fetch seam, which compares the SERVED frequency). The requested side
+    is a text HINT, not a parse slot: consumers must never state it as what
+    the user asked (the post-fetch disclosure words an annotation-only
+    request neutrally) or transform data on it.
+    """
+    requested_frequencies = _extract_requested_frequencies(query)
+    if not requested_frequencies:
+        return None
+    native = str(native_frequency or "").strip()
+    if native and _frequency_matches(requested_frequencies, native):
+        return None
+    if not native and not keep_unknown_native:
+        return None
+    return {
+        "requested_frequency": ",".join(sorted(requested_frequencies)),
+        "native_frequency": native,
+    }
+
+
 def selection_provenance_params(selection: Any) -> Dict[str, Any]:
     """Params a consumption seam installs alongside a selector PICK.
 
@@ -1441,8 +1475,8 @@ class IndicatorSelector:
             return None
         enriched = self._enrich_candidates([selected_candidate], provider)
         meta = enriched[0] if enriched else {}
-        native_frequency = str(meta.get("frequency") or "").strip()
-        if not native_frequency or _frequency_matches(requested_frequencies, native_frequency):
+        conflict = requested_frequency_conflict(query, meta.get("frequency"))
+        if conflict is None:
             return None
         requested_unit_tokens = _extract_requested_unit_tokens(query)
         if requested_unit_tokens and not _unit_matches(requested_unit_tokens, str(meta.get("unit") or "")):
@@ -1452,10 +1486,7 @@ class IndicatorSelector:
             requested_measurements, self._candidate_metadata_text(meta)
         ):
             return None
-        return {
-            "requested_frequency": ",".join(sorted(requested_frequencies)),
-            "native_frequency": native_frequency,
-        }
+        return conflict
 
     def _metadata_compatible_subset(
         self,
