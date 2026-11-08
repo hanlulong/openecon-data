@@ -575,6 +575,49 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         "en": "Options {options} are from providers other than {provider}.",
         "zh": "选项 {options} 来自 {provider} 以外的数据源。",
     },
+    # Honest outage answers (query._build_provider_outage_response): the
+    # provider gave NO verdict, so the answer never claims the data is missing.
+    # {provider} is the provider's display name; {seconds} a whole number.
+    "provider_unavailable": {
+        "en": (
+            "⚠️ **{provider} is not responding right now**\n\n"
+            "{provider} did not answer this request (timeouts or server errors), "
+            "so no data could be retrieved. This does not mean the data does not "
+            "exist. Please try again in a few minutes."
+        ),
+        "zh": (
+            "⚠️ **{provider} 暂时无法访问**\n\n"
+            "{provider} 未能响应本次请求（连接超时或服务器错误），因此暂时无法获取数据。"
+            "这并不代表该数据不存在，请几分钟后重试。"
+        ),
+    },
+    "provider_rate_limited": {
+        "en": (
+            "⚠️ **{provider} is limiting requests right now**\n\n"
+            "{provider} asked us to slow down, so this request was not answered. "
+            "This does not mean the data does not exist. Please try again in about "
+            "{seconds} seconds."
+        ),
+        "zh": (
+            "⚠️ **{provider} 当前正在限流**\n\n"
+            "{provider} 要求暂缓请求，因此本次请求未获响应。这并不代表该数据不存在，"
+            "请约 {seconds} 秒后重试。"
+        ),
+    },
+    "request_deadline_exhausted": {
+        "en": (
+            "⚠️ **This request ran out of time**\n\n"
+            "There was not enough time left to get an answer from {provider}, so no "
+            "data could be retrieved. This does not mean the data does not exist. "
+            "Please try again, or narrow the request (fewer countries or a shorter "
+            "period)."
+        ),
+        "zh": (
+            "⚠️ **请求处理超时**\n\n"
+            "剩余时间不足以从 {provider} 获取结果，因此暂时无法获取数据。这并不代表该数据"
+            "不存在，请重试，或缩小查询范围（减少国家数量或缩短时间范围）。"
+        ),
+    },
 }
 
 # The fixed prefix every option reply hint starts with, per language (see the

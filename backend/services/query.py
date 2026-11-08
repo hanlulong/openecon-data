@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -63,8 +64,16 @@ from ..providers.coingecko import CoinGeckoProvider
 from ..providers.chinamacro import ChinaMacroProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
-from ..utils.providers import ALL_PROVIDERS
-from ..utils.retry import DataNotAvailableError, retry_async, variant_retry_allowed
+from ..utils.providers import ALL_PROVIDERS, provider_progress_labels
+from ..utils.retry import (
+    DataNotAvailableError,
+    ProviderCoolingDown,
+    RequestBudgetExhausted,
+    is_no_verdict,
+    retry_async,
+    variant_retry_allowed,
+)
+from ..utils.request_budget import fallback_allowed
 from ..services.http_pool import extended_timeout
 from ..services.query_decomposition import (
     generate_sub_query,
@@ -1785,6 +1794,7 @@ class QueryService:
             if parse_stage_clarification:
                 return parse_stage_clarification
 
+        fetch_error: Optional[BaseException] = None
         try:
             if validation.is_multi_indicator:
                 logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
@@ -1798,6 +1808,9 @@ class QueryService:
         except DataNotAvailableError as fetch_exc:
             logger.warning("Data not available in _execute_resolved_intent: %s", fetch_exc)
             data = []  # Treat as empty data — let fallback logic below handle it
+            # Kept so the no-data answer can tell an outage (no verdict) from
+            # a provider that answered "no data".
+            fetch_error = fetch_exc
 
         if not data or (isinstance(data, list) and len(data) == 0):
             logger.warning(f"No data returned from {intent.apiProvider} for query: {query}")
@@ -1853,7 +1866,13 @@ class QueryService:
             except Exception as fallback_exc:
                 logger.warning("Fallback after empty response failed: %s", fallback_exc)
 
-            recovered_data = await self._maybe_recover_from_empty_data(query, intent)
+            # Semantic recovery re-probes the same provider; after a no-verdict
+            # it cannot help (variant_retry_allowed is the single gate).
+            recovered_data = (
+                await self._maybe_recover_from_empty_data(query, intent)
+                if variant_retry_allowed(fetch_error)
+                else None
+            )
             if recovered_data:
                 logger.info("✅ Semantic recovery succeeded after empty primary response")
                 recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
@@ -1898,6 +1917,7 @@ class QueryService:
                 query=query,
                 intent=intent,
                 processing_steps=tracker.to_list() if tracker else None,
+                attempt_error=fetch_error,
             )
             if no_data_clarification:
                 return no_data_clarification
@@ -2034,9 +2054,83 @@ class QueryService:
         *,
         attempt_error: Optional[BaseException] = None,
     ) -> Optional[QueryResponse]:
-        """Delegates to :func:`indicator_clarification.build_no_data_indicator_clarification`."""
+        """Delegates to :func:`indicator_clarification.build_no_data_indicator_clarification`.
+
+        Every no-data menu call site shares this delegate, so it is the one
+        place a NO-VERDICT failure (the provider never answered) is answered
+        honestly instead of with "I couldn't find data ... choose the
+        indicator you intended": the menu would claim a verdict nobody gave.
+        """
+        if intent is not None and is_no_verdict(attempt_error):
+            return self._build_provider_outage_response(
+                conversation_id, intent, attempt_error, processing_steps,
+            )
         return _ic_build_no_data_indicator_clarification(
             self, conversation_id, query, intent, processing_steps, attempt_error=attempt_error,
+        )
+
+    def _build_provider_outage_response(
+        self,
+        conversation_id: str,
+        intent: ParsedIntent,
+        error: BaseException,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> QueryResponse:
+        """The honest answer when the provider gave no verdict.
+
+        Routed on the exception TYPE only: RequestBudgetExhausted (we ran out
+        of request time) -> ``request_timeout``; a ProviderCoolingDown with a
+        retry-after -> the rate-limited text; any other no-verdict ->
+        ``provider_unavailable``. The wording lives in the localized catalog.
+
+        Stores no pending menu, persists no verified conversation state and
+        writes no cache: nothing was learned about the data, so a retry or a
+        follow-up ("and imports?") resolves against the parsed intent exactly
+        as after today's no-data menu turn, minus the menu.
+        """
+        language = getattr(intent, "language", None)
+        provider_key = normalize_provider_name(intent.apiProvider or "")
+        provider = (
+            provider_progress_labels().get(provider_key)
+            or intent.apiProvider
+            or "The data provider"
+        )
+        if isinstance(error, RequestBudgetExhausted):
+            message_id, error_code, seconds = "request_deadline_exhausted", "request_timeout", None
+        elif (
+            isinstance(error, ProviderCoolingDown)
+            and getattr(error, "retry_after_seconds", None) is not None
+        ):
+            try:
+                seconds = max(1, math.ceil(float(error.retry_after_seconds)))
+            except (TypeError, ValueError, OverflowError):
+                seconds = None
+            if seconds is None:
+                message_id, error_code = "provider_unavailable", "provider_unavailable"
+            else:
+                message_id, error_code = "provider_rate_limited", "provider_unavailable"
+        else:
+            message_id, error_code, seconds = "provider_unavailable", "provider_unavailable", None
+        message = _localized_message(
+            message_id, language, provider=provider, seconds=seconds,
+        ) or (
+            f"⚠️ **{provider} is not responding right now**\n\n"
+            f"{provider} did not answer this request, so no data could be "
+            "retrieved. This does not mean the data does not exist. Please try "
+            "again in a few minutes."
+        )
+        logger.warning(
+            "Provider gave no verdict (%s, %s); answering %s instead of a no-data menu",
+            provider_key or intent.apiProvider, type(error).__name__, error_code,
+        )
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            data=None,
+            clarificationNeeded=False,
+            error=error_code,
+            message=message,
+            processingSteps=processing_steps,
         )
 
     def _looks_like_provider_indicator_code(self, provider: str, indicator: str) -> bool:
@@ -4129,12 +4223,19 @@ class QueryService:
         intent: ParsedIntent,
         tracker: Optional['ProcessingTracker'] = None,
         error_code: str = "data_not_available",
+        *,
+        attempt_error: Optional[BaseException] = None,
     ) -> Optional[QueryResponse]:
         """Build a helpful response when a provider_change follow-up fails.
 
-        Returns None if the intent is not a provider_change follow-up.
+        Returns None if the intent is not a provider_change follow-up, or when
+        ``attempt_error`` is a no-verdict (the provider never answered, so
+        "<provider> doesn't appear to have X data" would be a false claim;
+        the caller's honest outage answer handles it).
         """
         if not intent or not intent.isFollowUp or intent.followUpType != "provider_change":
+            return None
+        if is_no_verdict(attempt_error):
             return None
 
         provider_name = intent.apiProvider
@@ -4301,6 +4402,15 @@ class QueryService:
         ):
             logger.info(
                 "🔒 Skipping cross-provider fallback for provider-locked intent (%s)",
+                primary_provider,
+            )
+            raise primary_error
+
+        if not fallback_allowed():
+            # The request deadline cannot fit a fallback resolve + fetch; the
+            # (typed) primary error answers honestly instead of a 504.
+            logger.info(
+                "⏱️ Skipping cross-provider fallback from %s: request deadline too close",
                 primary_provider,
             )
             raise primary_error
@@ -6485,7 +6595,7 @@ class QueryService:
             # Provider-change follow-up: give explicit message about unavailability
             if "intent" in locals() and intent:
                 provider_change_response = self._build_provider_change_unavailable_response(
-                    conv_id, intent, tracker,
+                    conv_id, intent, tracker, attempt_error=exc,
                 )
                 if provider_change_response:
                     return provider_change_response
@@ -7128,9 +7238,14 @@ class QueryService:
         except Exception as fallback_exc:
             logger.warning("Standard pipeline fallback providers failed: %s", fallback_exc)
 
-        # Semantic recovery pass
+        # Semantic recovery pass (re-probes the same provider: skipped after
+        # a no-verdict fetch error, see variant_retry_allowed)
         try:
-            recovered_data = await self._maybe_recover_from_empty_data(query, intent)
+            recovered_data = (
+                await self._maybe_recover_from_empty_data(query, intent)
+                if variant_retry_allowed(fetch_error)
+                else None
+            )
             if recovered_data:
                 logger.info("✅ Standard pipeline: semantic recovery succeeded")
                 recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
