@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -628,6 +630,36 @@ def test_database_search_counts_swallowed_errors(catalog) -> None:
     catalog._get_connection().execute("DROP TABLE indicators_fts")
     assert catalog.search("gross domestic product", provider="FRED") == []
     assert catalog.search_failures == before + 1
+
+
+class _SlowCounterDB(IndicatorDatabase):
+    """search_failures whose read yields the GIL between read and write,
+    turning an unguarded ``x = x + 1`` into a reliably lost update."""
+
+    @property
+    def search_failures(self):  # type: ignore[override]
+        value = self.__dict__.get("_slow_failures", 0)
+        time.sleep(0.005)
+        return value
+
+    @search_failures.setter
+    def search_failures(self, value):
+        self.__dict__["_slow_failures"] = value
+
+
+@pytest.mark.parametrize("with_instance_lock", [True, False])
+def test_concurrent_search_failures_are_never_lost(with_instance_lock) -> None:
+    db = _SlowCounterDB.__new__(_SlowCounterDB)
+    if with_instance_lock:
+        db._failure_lock = threading.Lock()
+    threads = [threading.Thread(target=db._record_search_failure) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    # Every concurrent failure is counted, so no caller's before/after
+    # comparison can mistake a failed [] for a clean (memoizable) result.
+    assert db.search_failures == 8
 
 
 def test_memo_is_bounded_by_payload_bytes(monkeypatch) -> None:

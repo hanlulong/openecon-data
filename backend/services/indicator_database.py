@@ -40,6 +40,10 @@ from ..utils.catalog_metadata_signals import normalize_catalog_row_frequency
 
 logger = logging.getLogger(__name__)
 
+# Guards search_failures on IndicatorDatabase instances built without
+# __init__ (tests via __new__), which have no per-instance _failure_lock.
+_SEARCH_FAILURE_FALLBACK_LOCK = threading.Lock()
+
 # Database path
 DB_PATH = Path(__file__).parent.parent / "data" / "indicators.db"
 
@@ -170,9 +174,19 @@ class IndicatorDatabase:
         self.catalog_generation = 0
         # Bumped whenever search() swallows an error and returns [], so
         # callers can tell a failed search from a genuine no-match and avoid
-        # caching the failure.
+        # caching the failure. Incremented under _failure_lock (searches run
+        # concurrently on asyncio.to_thread workers): a lost update could
+        # leave the counter equal to a caller's before-value and memoize a
+        # failed []. Its own lock, not _write_lock, which bulk inserts hold.
         self.search_failures = 0
+        self._failure_lock = threading.Lock()
         self._signature_path: Optional[str] = None
+
+    def _record_search_failure(self) -> None:
+        """Atomically count one swallowed search error (see search_failures)."""
+        lock = getattr(self, "_failure_lock", None) or _SEARCH_FAILURE_FALLBACK_LOCK
+        with lock:
+            self.search_failures = getattr(self, "search_failures", 0) + 1
 
     def catalog_signature(self) -> Tuple[Any, ...]:
         """Cheap token that changes whenever the stored catalog may have changed.
@@ -611,7 +625,7 @@ class IndicatorDatabase:
             # Swallowing the error keeps retrieval degradation graceful
             # (embedding retrieval still runs), but it MUST be diagnosable:
             # log the inputs and full traceback, not just str(e).
-            self.search_failures = getattr(self, "search_failures", 0) + 1
+            self._record_search_failure()
             logger.exception(
                 "Search error for query=%r provider=%r category=%r fts_query=%r",
                 query, provider, category, fts_query,
