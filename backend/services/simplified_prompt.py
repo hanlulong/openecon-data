@@ -101,9 +101,8 @@ Important constraints:
 - Select apiProvider using the PROVIDER CAPABILITIES section below.
   Backend may refine explicit provider, structural coverage, or country context;
   choose the best-fit provider for the query.
-- Do not invent indicator codes. Indicator arrays must contain plain-language metric names
-  copied from the user's intent, never provider-native IDs/codes unless the user explicitly
-  supplied that exact code.
+- Do not invent indicator codes. Indicator arrays must contain plain-language metric names copied from the user's
+  intent, never provider-native IDs/codes unless the user explicitly supplied that exact code.
 - parameters.seriesId: ONE provider-native code the user literally typed, copied verbatim (several: list them
   in indicators); never a description, null for concepts, never a code the user rejects ("CPILFESL, not CPIAUCSL" -> "CPILFESL").
 - parameters.metric (crypto only, else null): price|market_cap|volume|price_change = the measure the user WANTS,
@@ -249,17 +248,14 @@ Output schema (all keys required unless noted null):
 
 Required formatting rules:
 - queryType: one of "data_fetch", "informational", "analysis", "comparison"
-  - "data_fetch": user wants actual data/time series (default, most queries). Asking for values, observations,
-    the latest reading or a series over a period, or for that series' source or API URL, is data_fetch even if
-    it says "list", "series", "source" or "API".
+  - "data_fetch": user wants actual data/time series (default, most queries). Asking for values, observations, the latest reading
+    or a series over a period, or for that series' source or API URL, is data_fetch even if it says "list", "series", "source" or "API".
   - "informational": user is asking ABOUT available data, indicators, or providers, or asks a conceptual economics
     question with no country or time scope and no data requested (e.g., "What GDP indicators does World Bank have?")
   - "analysis": user wants complex analysis requiring code execution
-  - "comparison": user wants structured comparison or ranking across entities
-    (e.g., compare US and Germany GDP, highest unemployment rate across G7, top countries by inflation)
-- informationalSubtype: null unless queryType="informational"; then one of "indicator_search" (indicators/series
-  for a named topic or provider), "data_sources" (which data providers/sources you have, no topic named),
-  "indicator_count" (how many indicators/series), "definition" (what a concept means, how it is measured, a method question)
+  - "comparison": user wants structured comparison or ranking across entities (e.g., compare US and Germany GDP, highest unemployment rate across G7, top countries by inflation)
+- informationalSubtype: null unless queryType="informational"; then one of "indicator_search" (indicators/series for a named topic
+  or provider), "data_sources" (which data providers/sources you have, no topic named), "indicator_count" (how many indicators/series), "definition" (what a concept means, how it is measured, a method question)
 - apiProvider: string
 - indicators: non-empty array of strings (for informational queries, use search terms like ["employment indicators"])
 - parameters: object (use null values or omit unrelated keys)
