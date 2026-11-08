@@ -31,6 +31,7 @@ from backend.services.conversation_state_v2 import (
     merge_state,
 )
 from backend.services import data_fetcher
+from backend.services import follow_up_retrieval
 from backend.services.data_fetcher import (
     _normalize_known_country_to_iso2,
     _prepare_fred_country_scope_params,
@@ -186,12 +187,19 @@ class FredDiscoveryInvariantTests(unittest.TestCase):
             originalQuery="compare with Canada", isFollowUp=True,
         )
         params = dict(intent.parameters, __original_query="compare with Canada")
-        prepared = self._prepare(params, intent)
+        # A bare code the catalog does not know carries no concept.
+        with patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value=""):
+            prepared = self._prepare(dict(params), intent)
         # No discovery -> the fail-closed guard + fallback own the request.
         self.assertNotIn("__fred_country_scope_discovery", prepared)
         with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
             with self.assertRaises(DataNotAvailableError):
                 _raise_if_fred_country_scope_unsupported({}, prepared, intent)
+        # A catalog-known code's TITLE is a concept (shared follow_up_retrieval
+        # chain): the search is title + country, never the utterance/bare code.
+        with patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value="Unemployment Rate"):
+            prepared = self._prepare(dict(params), intent)
+        self.assertEqual(prepared["__fred_discovery_query"], "Canada Unemployment Rate")
 
     def test_first_turn_discovery_text_is_unchanged(self) -> None:
         intent = ParsedIntent(
@@ -587,9 +595,15 @@ class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
     def test_display_label_and_code_shaped_label_are_not_concepts(self) -> None:
         # The display label is the raw delta utterance on a follow-up without
         # resolvedQuery; a code-shaped label is a series id, not a concept.
-        for params_extra, indicators in (
-            ({"__display_indicator_label": "compare with Canada"}, ["UNRATE"]),
-            ({"__semantic_indicator_label": "UNRATE"}, ["UNRATE"]),
+        # Combined chain (follow_up_retrieval.structured_indicator_label): a
+        # bare code the catalog does not know yields no discovery; a
+        # catalog-known code (as the semantic label or the indicator) is
+        # searched by its TITLE + country.  An unknown code-shaped SEMANTIC
+        # label is kept as an acronym concept ("CPI"/"PMI"), so that subcase
+        # is only meaningful with the catalog-known code.
+        for params_extra, indicators, unknown_has_no_discovery in (
+            ({"__display_indicator_label": "compare with Canada"}, ["UNRATE"], True),
+            ({"__semantic_indicator_label": "UNRATE"}, ["UNRATE"], False),
         ):
             with self.subTest(params_extra=params_extra):
                 intent = ParsedIntent(
@@ -597,18 +611,46 @@ class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
                     parameters={"countries": ["United States", "CA"], "indicator": "UNRATE", **params_extra},
                     originalQuery="compare with Canada", isFollowUp=True,
                 )
-                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+                if unknown_has_no_discovery:
+                    with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False), \
+                            patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value=""):
+                        prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+                    self.assertNotIn("__fred_discovery_query", prepared)
+                # With a catalog-known code the title is searched instead —
+                # still never the display label / utterance or the bare code.
+                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False), \
+                        patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value="Unemployment Rate"):
                     prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
-                self.assertNotIn("__fred_discovery_query", prepared)
-        # A code-shaped label falls through to a non-code parsed indicator.
+                self.assertEqual(prepared["__fred_discovery_query"], "Canada Unemployment Rate")
+        # A code-shaped label falls through to a non-code parsed indicator,
+        # which beats the code's catalog title.
         intent = ParsedIntent(
             apiProvider="FRED", indicators=["UNRATE", "unemployment rate"], clarificationNeeded=False,
             parameters={"country": "CA", "indicator": "UNRATE", "__semantic_indicator_label": "UNRATE"},
             originalQuery="and Canada", isFollowUp=True,
         )
-        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False), \
+                patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value="Unemployment Rate"):
             prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
         self.assertEqual(prepared["__fred_discovery_query"], "Canada unemployment rate")
+
+    def test_resolved_query_is_the_last_resort_concept_never_the_utterance(self) -> None:
+        # No structured label and an unknown bare code: the parser's standalone
+        # resolvedQuery is the last resort, unless it is the utterance itself.
+        for resolved, expected in (
+            ("Canada unemployment rate", "Canada unemployment rate"),
+            ("compare with Canada", None),
+        ):
+            with self.subTest(resolved=resolved):
+                intent = ParsedIntent(
+                    apiProvider="FRED", indicators=["UNRATE"], clarificationNeeded=False,
+                    parameters={"countries": ["United States", "CA"], "indicator": "UNRATE"},
+                    originalQuery="compare with Canada", resolvedQuery=resolved, isFollowUp=True,
+                )
+                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False), \
+                        patch.object(follow_up_retrieval, "_catalog_name_for_code", return_value=""):
+                    prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+                self.assertEqual(prepared.get("__fred_discovery_query"), expected)
 
     def test_multi_indicator_non_us_dispatch_fails_closed_instead_of_duplicating(self) -> None:
         intent = ParsedIntent(

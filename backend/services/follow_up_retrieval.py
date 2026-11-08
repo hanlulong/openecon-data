@@ -60,8 +60,10 @@ def structured_indicator_label(
     1. ``__semantic_indicator_label`` is semantic BY CONSTRUCTION (merged
        conversation state / LLM indicator text): an acronym concept such as
        "GDP"/"CPI"/"PMI" is kept as-is. Only when the indicator DB actually
-       knows that exact token as a code for this provider is it replaced by
-       the catalog NAME (a carried "UNRATE"/"BAMLH0A0HYM2" becomes its title).
+       knows that exact token as a code for this provider is it replaced —
+       by a non-code concept phrase among the parsed indicators when there is
+       one, else by the catalog NAME (a carried "UNRATE"/"BAMLH0A0HYM2"
+       becomes its title).
     2. Otherwise the indicator token, whose code shape is checked: a bare
        provider code becomes its catalog name. On a follow-up an unknown bare
        code yields "" (never "Japan UNRATE"), and the display label — which
@@ -81,9 +83,20 @@ def structured_indicator_label(
 
     semantic = _clean(params.get("__semantic_indicator_label"))
     if semantic and semantic.lower() not in raw_texts:
-        if _looks_like_provider_code(semantic):
-            return _catalog_name_for_code(provider, semantic) or semantic
-        return semantic
+        if not _looks_like_provider_code(semantic):
+            return semantic
+        semantic_title = _catalog_name_for_code(provider, semantic)
+        if not semantic_title:
+            return semantic
+        # The label is a real provider code (state persisted from a turn where
+        # the user typed the id). A concept phrase the parser gave for this
+        # turn describes the user's concept better than that series' title
+        # (which can be geography-specific); the title is the fallback.
+        for candidate in [*indicators, params.get("indicator")]:
+            text = _clean(candidate)
+            if text and text.lower() not in raw_texts and not _looks_like_provider_code(text):
+                return text
+        return semantic_title
 
     candidates = [] if follow_up else [params.get("__display_indicator_label")]
     candidates += [indicators[0] if indicators else "", params.get("indicator")]
