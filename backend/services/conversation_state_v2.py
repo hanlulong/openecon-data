@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ..models import NormalizedData, ParsedIntent
 from ..utils.providers import normalize_provider_name
@@ -109,6 +109,37 @@ def _indicator_to_coin_id(indicator: Optional[str]) -> Optional[str]:
         parts = parts[:-1]
     indicator_key = " ".join(parts).strip()
     return _CRYPTO_INDICATOR_TO_COIN_ID.get(indicator_key)
+
+
+def _state_coin_ids(state: "ConversationState") -> List[str]:
+    """CoinGecko asset ids the state currently serves (explicit, else derived)."""
+    if state.coin_ids:
+        return list(state.coin_ids)
+    derived: List[str] = []
+    for indicator in state.last_indicators_resolved or ([state.indicator] if state.indicator else []):
+        coin_id = _indicator_to_coin_id(indicator)
+        if coin_id and coin_id not in derived:
+            derived.append(coin_id)
+    return derived
+
+
+def is_coingecko_scoped(state: "ConversationState") -> bool:
+    """True when the state serves CoinGecko assets (the measure slot's scope)."""
+    return bool(state.coin_ids) or normalize_provider_name(
+        state.provider or state.routed_provider or ""
+    ) == "COINGECKO"
+
+
+def delta_metric_in_scope(current: "ConversationState", delta: "FollowUpDelta") -> bool:
+    """Structural scope of ``delta.changed_metric``: it only means something
+    when the turn stays on (or moves to) CoinGecko assets. Mirrors merge_state:
+    a provider switch decides alone; an indicator naming a CoinGecko asset
+    moves the state to CoinGecko; otherwise the current state's scope holds."""
+    if delta.changed_provider:
+        return normalize_provider_name(delta.changed_provider) == "COINGECKO"
+    if delta.changed_indicator and _indicator_to_coin_id(delta.changed_indicator):
+        return True
+    return is_coingecko_scoped(current)
 
 
 def _looks_like_provider_code(provider: str, value: Optional[str]) -> bool:
@@ -583,6 +614,14 @@ class FollowUpDelta(BaseModel):
     changed_trade_reporter: Optional[str] = None
     changed_trade_partner: Optional[str] = None
     changed_trade_commodity: Optional[str] = None
+    # CoinGecko measure switch on the SAME conversation ("价格呢" / "what
+    # about volume" / "show market cap instead"). The LLM picks the value;
+    # it is validated structurally against the fetch layer's ONE measure enum
+    # (price | market_cap | volume | price_change) and dropped when it is not
+    # a member. Without this slot a same-asset measure switch had nowhere to
+    # go, was classified as e.g. language_change, and the persisted
+    # ConversationState.crypto_metric re-served the previous measure.
+    changed_metric: Optional[str] = None
 
     # --- Meta ---
     is_new_query: bool = False
@@ -612,6 +651,18 @@ class FollowUpDelta(BaseModel):
     # invariant #8.
     delta_confidence: Optional[float] = None
     needs_full_rewrite: bool = False
+
+    @field_validator("changed_metric", mode="before")
+    @classmethod
+    def _validate_changed_metric(cls, value: Any) -> Optional[str]:
+        # Structural enum membership only (exact normalized equality with the
+        # enum's provider-vocabulary spellings). Invalid -> None (dropped), so
+        # an off-enum LLM value never raises / triggers an Instructor retry.
+        if value is None:
+            return None
+        from .data_fetcher import _coingecko_enum_member
+
+        return _coingecko_enum_member(value)
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +709,9 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     3. ``changed_country`` / ``changed_countries`` → clear decomposition.
     4. ``added_countries`` / ``removed_countries`` → merge into existing list.
     5. ``added_dimensions`` / ``removed_dimensions`` → merge into existing dict.
+    6. ``changed_metric`` → CoinGecko measure (CoinGecko-scoped); an asset
+       switch keeps the previous measure, a non-asset indicator change or a
+       provider change clears it.
     """
 
     if delta.is_new_query:
@@ -679,6 +733,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             trade_reporter=delta.changed_trade_reporter,
             trade_partner=delta.changed_trade_partner,
             trade_commodity=delta.changed_trade_commodity,
+            crypto_metric=delta.changed_metric,
             # Language is sticky per conversation (a new topic from the same
             # user stays in their language); the sub-region annotation is
             # topic-specific and resets on a genuinely new query. An explicit
@@ -728,6 +783,13 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         # Auto-detect crypto indicator switches and update coin_ids/provider
         _coin = _indicator_to_coin_id(delta.changed_indicator)
         if _coin:
+            # The measure is a slot orthogonal to the asset: switching ASSET
+            # ("bitcoin market cap" -> "以太坊呢" / "what about ethereum") keeps
+            # the measure. Re-naming the SAME asset carries no asset change, so
+            # it keeps the clear above (the measure then comes from
+            # changed_metric below or the fetch layer's label/default chain).
+            if current.crypto_metric and _coin not in _state_coin_ids(current):
+                merged.crypto_metric = current.crypto_metric
             merged.coin_ids = [_coin]
             merged.provider = "COINGECKO"
             merged.routed_provider = "COINGECKO"
@@ -872,6 +934,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.dimensions = None
         merged.coin_ids = None
         merged.crypto_metric = None
+
+    # --- Crypto measure ---
+    # Applied after the indicator/provider branches (which clear it) so an
+    # explicit measure switch on the same turn wins; CoinGecko-scoped only.
+    if delta.changed_metric and is_coingecko_scoped(merged):
+        merged.crypto_metric = delta.changed_metric
 
     # --- Time ---
     if delta.changed_start_date:

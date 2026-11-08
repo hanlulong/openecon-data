@@ -19,7 +19,12 @@ import logging
 import re
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from .conversation_state_v2 import ConversationState, FollowUpDelta
+from .conversation_state_v2 import (
+    ConversationState,
+    FollowUpDelta,
+    delta_metric_in_scope,
+    is_coingecko_scoped,
+)
 from ..routing.country_resolver import CountryResolver
 
 if TYPE_CHECKING:
@@ -951,6 +956,11 @@ class DeltaExtractor:
             state_lines.append(f"  Trade reporter: {_san(state.trade_reporter)}")
         if state.trade_partner:
             state_lines.append(f"  Trade partner: {_san(state.trade_partner)}")
+        # The CoinGecko measure being served (absent metric = the fetch
+        # default, price) so the LLM can see a measure SWITCH and fill
+        # changed_metric instead of misfiling it (e.g. as language_change).
+        if is_coingecko_scoped(state):
+            state_lines.append(f"  Crypto measure: {_san(state.crypto_metric or 'price')}")
         # Surface the conversation language (FIX 4) so the LLM can detect when a
         # follow-up is written in a DIFFERENT language and set changed_language.
         if state.language:
@@ -1060,7 +1070,14 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
      Language is otherwise sticky and carried forward automatically.
    - A pure language request ("in English please") with no other change is a
      parameter_delta with only changed_language set.
-6. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
+5c. For crypto measures (only when CURRENT STATE lists "Crypto measure:"):
+   - changed_metric: one of price | market_cap | volume | price_change — set it
+     when the user asks for a DIFFERENT measure than "Crypto measure:", in any
+     language or phrasing. A measure switch is a parameter_delta: keep the
+     asset (do not put the measure into changed_indicator, never new_query).
+     If the asset ALSO changes, set changed_indicator to the new asset as well.
+     Leave changed_metric null when the measure is not mentioned (it carries).
+6. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, metric_change, new_query, compound_change
 7. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
 8. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
 9. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
@@ -1137,6 +1154,12 @@ Output the query_type and any changed fields as JSON."""
                             delta.query_type, query_text[:50])
                 return delta
 
+            # changed_metric is CoinGecko-scoped (structural slot scope): off
+            # a CoinGecko state it is meaningless and must not, alone, turn a
+            # turn into a "change" that re-serves the previous answer.
+            if delta.changed_metric and not delta_metric_in_scope(state, delta):
+                delta.changed_metric = None
+
             # For parameter_delta: at least one field must be non-None AND non-empty.
             # LLM may return empty strings/dicts/lists which are truthy but meaningless.
             def _has_value(val: object) -> bool:
@@ -1157,7 +1180,7 @@ Output the query_type and any changed fields as JSON."""
                     "added_dimensions", "removed_dimensions", "changed_decomposition",
                     "changed_chart_type", "changed_language", "changed_trade_flow",
                     "changed_trade_reporter", "changed_trade_partner",
-                    "changed_trade_commodity",
+                    "changed_trade_commodity", "changed_metric",
                 ]
             ) or delta.is_new_query
 
@@ -1519,6 +1542,17 @@ Output the query_type and any changed fields as JSON."""
                 if indicator_name not in detected_crypto_indicators:
                     detected_crypto_indicators.append(indicator_name)
         if detected_crypto_indicators:
+            # The structural tier may claim an utterance only when it consumed
+            # every content token (fillers + the asset aliases it maps). Any
+            # residual token — "ethereum price", "ETH volume instead",
+            # "ethereum 成交量" — carries meaning this handler cannot represent
+            # (e.g. a measure switch), so the LLM tier owns the turn.
+            consumed_tokens = _FILLER_WORDS | set(_CRYPTO_ASSET_ALIASES)
+            if any(
+                token not in consumed_tokens
+                for token in re.findall(r"[^\W_]+", query_lower)
+            ):
+                return None
             if is_additive:
                 logger.info(
                     "Delta: additive crypto indicators %s",
