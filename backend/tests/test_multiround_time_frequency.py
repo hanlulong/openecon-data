@@ -333,6 +333,45 @@ def test_frequency_disclosure_on_fresh_fetch_and_cache_hit(monkeypatch):
     assert not (cached_obj.metadata.notes or [])
 
 
+@pytest.mark.parametrize("language, slot_words, hint_forbidden", [
+    ("en", ("asked for", "**monthly**"), ("asked for", "monthly")),
+    ("zh", ("您请求的是", "**月度**"), ("您请求", "月度")),
+])
+def test_frequency_note_states_the_request_only_for_a_parse_slot(language, slot_words, hint_forbidden):
+    daily = [_series([("2024-01-02", 1.0)], frequency="Daily")]
+    # Parse/state SLOT: a structured statement of the request -> said so.
+    slot_note = data_fetcher._disclose_frequency_mismatch(daily, {"frequency": "monthly"}, language)[0].metadata.notes
+    assert all(word in slot_note[0] for word in slot_words), slot_note
+    # Annotation only (raw-text hint): the served frequency, nothing claimed.
+    hint = {"__frequency_mismatch": {"requested_frequency": "monthly", "native_frequency": "Daily"}}
+    hint_note = data_fetcher._disclose_frequency_mismatch(daily, hint, language)[0].metadata.notes
+    assert len(hint_note) == 1
+    assert not any(word in hint_note[0] for word in hint_forbidden), hint_note
+    assert ("**daily**" if language == "en" else "**日度**") in hint_note[0]
+
+
+@pytest.mark.parametrize("query, native", [
+    # Real-user phrasings the text hint misreads as a frequency request.
+    ("US unemployment rate for the year 2025", "Monthly"),
+    ("China CPI year-on-year", "Monthly"),
+    ("CPI year over year", "Monthly"),
+    ("GDP growth annual rate", "Quarterly"),
+    ("3-month treasury bill rate", "Daily"),
+    ("inflation from a year ago", "Monthly"),
+])
+def test_misread_frequency_hints_never_become_a_claim_about_the_request(query, native):
+    from backend.services.indicator_selector import FREQUENCY_MISMATCH_PARAM, _extract_requested_frequencies
+
+    # The annotation's request side is exactly this hint (selector kept-pick).
+    requested = _extract_requested_frequencies(query)
+    assert requested, f"hint no longer misreads {query!r}: drop the case"
+    params = {FREQUENCY_MISMATCH_PARAM: {"requested_frequency": ",".join(sorted(requested)), "native_frequency": native}}
+    for language in ("en", "zh"):
+        out = data_fetcher._disclose_frequency_mismatch([_series([("2025-01-01", 1.0)], frequency=native)], params, language)
+        for note in out[0].metadata.notes or []:
+            assert "asked for" not in note and "您请求" not in note, (query, note)
+
+
 @pytest.mark.parametrize("requested, native", [("monthly", "Monthly"), ("quarterly", "Quarterly, End of Period"), (None, "Daily"), ("monthly", "irregular")])
 def test_no_frequency_disclosure_when_matching_or_unknown(requested, native):
     params = {"frequency": requested} if requested else {}
@@ -576,7 +615,11 @@ def test_kept_pick_annotation_reaches_first_turn_disclosure_without_frequency_sl
     svc = _svc()
     intent.parameters = params
     served = asyncio.run(data_fetcher.fetch_data(svc, intent))
-    assert any("daily" in note and "monthly" in note for note in served[0].metadata.notes or [])
+    notes = served[0].metadata.notes or []
+    # The annotation's request is a raw-text HINT: the note states the served
+    # frequency and never claims what the user asked.
+    assert any("**daily**" in note for note in notes), notes
+    assert not any("asked for" in note or "monthly" in note for note in notes), notes
     assert not (svc._save_to_cache.await_args.args[2].metadata.notes or []), "disclosure must not be cached"
 
 

@@ -1677,30 +1677,41 @@ def _series_period_for_points(series: Any) -> Optional[str]:
     return _series_period_code(series, dates)
 
 
-def _requested_frequency_code(params: dict[str, Any]) -> Optional[str]:
-    """Requested frequency as a period code, from structured signals only.
+def _requested_frequency(params: dict[str, Any]) -> tuple[Optional[str], bool]:
+    """(requested frequency as a period code, whether it is a parse SLOT).
 
     1. ``params['frequency']`` — the LLM-parsed / state-carried slot (delta
-       frequency changes, carried state, clarification carries).
+       frequency changes, carried state, clarification carries): a
+       structured statement of what the user asked -> ``(code, True)``.
     2. ``params['__frequency_mismatch']['requested_frequency']`` — the
-       selector's annotation on a pick KEPT despite a frequency-only conflict
-       (the first-turn parse has no frequency slot, so without this the kept
-       daily-for-monthly pick would be served silently). Comma-joined when
-       several were requested: used only when they normalize to ONE code.
+       annotation on a pick served at its native frequency without a slot
+       (a selector pick KEPT despite a frequency-only conflict, or a
+       user-named code lock; the first-turn parse has no frequency slot, so
+       without this the daily-for-monthly series would be served silently).
+       Its source is a raw-text frequency HINT that misreads windows and rate
+       words ("for the year 2025", "annual rate", "year over year",
+       "3-month") -> ``(code, False)``: good enough to disclose the served
+       frequency, never to claim what the user asked. Comma-joined when
+       several were read: used only when they normalize to ONE code.
     """
     code = _frequency_code(params.get("frequency"))
     if code:
-        return code
+        return code, True
     mismatch = params.get("__frequency_mismatch")
     if not isinstance(mismatch, dict):
-        return None
+        return None, False
     codes = {
         c for c in (
             _frequency_code(token)
             for token in str(mismatch.get("requested_frequency") or "").split(",")
         ) if c
     }
-    return next(iter(codes)) if len(codes) == 1 else None
+    return (next(iter(codes)) if len(codes) == 1 else None), False
+
+
+def _requested_frequency_code(params: dict[str, Any]) -> Optional[str]:
+    """Requested frequency as a period code (see ``_requested_frequency``)."""
+    return _requested_frequency(params)[0]
 
 
 def _disclose_frequency_mismatch(
@@ -1710,14 +1721,16 @@ def _disclose_frequency_mismatch(
 
     One post-fetch reconciliation point (fresh fetches AND cache hits, every
     substitution path: kept frequency-conflict picks, exact-code locks,
-    provider fallbacks, annual-only mirrors). Compares the structured
-    requested frequency (``_requested_frequency_code``) with each series'
-    SERVED Metadata.frequency via the closed code table; unknown on either
-    side -> no note. Returns a
+    provider fallbacks, annual-only mirrors). Compares the requested
+    frequency (``_requested_frequency``) with each series' SERVED
+    Metadata.frequency via the closed code table; unknown on either side ->
+    no note. Only a parse SLOT is worded as "you asked for X"; an
+    annotation-only (text-hint) request gets a neutral note that states the
+    served frequency and nothing about the user's request. Returns a
     list where annotated series are COPIES, so cached provider objects never
     accumulate per-request (per-language) notes. Idempotent.
     """
-    requested = _requested_frequency_code(params)
+    requested, from_parse_slot = _requested_frequency(params)
     if not requested or not result:
         return result
     disclosed: List[NormalizedData] = []
@@ -1727,14 +1740,22 @@ def _disclose_frequency_mismatch(
         if not native or native == requested:
             disclosed.append(series)
             continue
-        note = _localized_message(
-            "frequency_mismatch_disclosure",
-            language,
-            requested=_localized_message(f"frequency_label_{requested}", language)
-            or str(params.get("frequency")).strip(),
-            native=_localized_message(f"frequency_label_{native}", language)
-            or str(metadata.frequency).strip(),
+        native_label = (
+            _localized_message(f"frequency_label_{native}", language)
+            or str(metadata.frequency).strip()
         )
+        if from_parse_slot:
+            # A structured slot says what the user asked: say so.
+            note = _localized_message(
+                "frequency_mismatch_disclosure",
+                language,
+                requested=_localized_message(f"frequency_label_{requested}", language)
+                or str(params.get("frequency")).strip(),
+                native=native_label,
+            )
+        else:
+            # A text hint does not: state only the served frequency.
+            note = _localized_message("frequency_native_disclosure", language, native=native_label)
         existing = list(metadata.notes or [])
         if not note or note in existing:
             disclosed.append(series)

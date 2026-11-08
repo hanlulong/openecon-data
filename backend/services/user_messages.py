@@ -199,8 +199,8 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     },
     # (3d) Served-vs-requested frequency reconciliation (data_fetcher
     # _disclose_frequency_mismatch). {requested}/{native} are the structured
-    # frequency labels (requested from the parsed intent, native from the
-    # served series' metadata).
+    # frequency labels (requested from the parsed intent's frequency SLOT,
+    # native from the served series' metadata).
     "frequency_mismatch_disclosure": {
         "en": (
             "This series is published at **{native}** frequency; you asked for "
@@ -210,6 +210,17 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "该序列按**{native}**频率发布；您请求的是**{requested}**数据。"
             "以下按其原始频率显示。"
         ),
+    },
+    # Same reconciliation when the requested frequency is only a raw-text
+    # HINT (selector kept-pick / code-lock annotation, no parse slot): it
+    # misreads "for the year 2025", "annual rate", "year over year", so the
+    # note states the served frequency and never what the user asked.
+    "frequency_native_disclosure": {
+        "en": (
+            "This series is published at **{native}** frequency and is shown at "
+            "that frequency (no frequency conversion was applied)."
+        ),
+        "zh": "该序列按**{native}**频率发布，以下按其原始频率显示（未做频率转换）。",
     },
     # Frequency-code display labels for the disclosure above (closed code
     # table D/W/M/Q/S/A produced by data_fetcher._frequency_code).
