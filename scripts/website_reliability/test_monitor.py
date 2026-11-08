@@ -388,6 +388,52 @@ def test_saved_degraded_other_with_contradictory_other_list_is_invalid(tmp_path,
     assert monitor.saved_status(target) == {"status": "FAILED", "reason": "invalid_report"}
 
 
+KNOWN_DOWN_HOST = "jp.hansearch.com"  # owner-retired, kept in KNOWN_DOWN
+
+
+def run_main_with_known_down_row(tmp_path, monkeypatch, field, value):
+    """main() over the real summary with ONE known-down row changed."""
+    report = website_report(degraded=True)
+    row = next(row for row in report["results"] if row["host"] == KNOWN_DOWN_HOST)
+    row[field] = value
+    child_failed = not (row["http_status"] == 503 and row["curl_exit_code"] == 0
+                        and row["tls_verified"] and row["canonical_target_verified"])
+
+    def fake_probe(arguments, timeout):
+        Path(arguments[3]).write_text(json.dumps(report))
+        return {"exit_code": 1 if child_failed else 0, "output": "", "timed_out": False}
+
+    target = tmp_path / "latest.json"
+    monkeypatch.setattr(monitor, "run_probe", fake_probe)
+    monkeypatch.setattr(monitor, "check_mcp", lambda: {"ok": True, "reason": "verified", "timed_out": False})
+    monkeypatch.setattr(monitor, "check_backends", lambda: {"ok": True, "checks": [{"port": p, "ok": True} for p in (3001, 3002)]})
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--output", str(target)])
+    return monitor.main(), json.loads(target.read_text())
+
+
+def test_known_down_contract_503_is_accepted_degradation(tmp_path, monkeypatch):
+    assert KNOWN_DOWN_HOST in websites.KNOWN_DOWN
+    exit_code, report = run_main_with_known_down_row(tmp_path, monkeypatch, "http_status", 503)
+    assert exit_code == 0
+    assert report["status"] == "DEGRADED"
+    assert KNOWN_DOWN_HOST in report["known_degraded"]
+    assert report["other_failed_checks"] == [] and report["failed_checks"] == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("curl_exit_code", 28), ("curl_exit_code", 7), ("tls_verified", False),
+    ("canonical_target_verified", False), ("http_status", 500), ("http_status", 404),
+])
+def test_known_down_contract_other_failure_is_degraded_other_and_non_fatal(tmp_path, monkeypatch, field, value):
+    # KNOWN_DOWN accepts exactly "503 over a good transport"; any other
+    # failure on that host stays visible (DEGRADED_OTHER) but never pages.
+    exit_code, report = run_main_with_known_down_row(tmp_path, monkeypatch, field, value)
+    assert exit_code == 0
+    assert report["status"] == "DEGRADED_OTHER"
+    assert report["failed_checks"] == []
+    assert {label.split(":")[0] for label in report["other_failed_checks"]} == {KNOWN_DOWN_HOST}
+
+
 def test_healthy_run_still_reports_known_degradation(tmp_path, monkeypatch):
     exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, None)
     assert exit_code == 0
