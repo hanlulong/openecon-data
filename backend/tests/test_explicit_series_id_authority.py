@@ -383,7 +383,10 @@ def test_fred_contract_keys_on_a_kept_transform_suffix() -> None:
 @pytest.mark.parametrize(
     "series_id,sent",
     [("CPIAUCSL:pc1", "CPIAUCSL:pc1"), ("cpiaucsl:pc1", "CPIAUCSL:pc1"),
-     ("CPIAUCSL", "CPIAUCSL"), ("PPIACO", None)],
+     ("CPIAUCSL", "CPIAUCSL"), ("PPIACO", None),
+     # Only FRED's documented ``units`` values are sent; others are dropped.
+     ("CPIAUCSL:PC1", "CPIAUCSL:pc1"), ("CPIAUCSL:ch1", "CPIAUCSL:ch1"),
+     ("CPIAUCSL:yoy", "CPIAUCSL"), ("CPIAUCSL:lin", "CPIAUCSL"), ("CPIAUCSL:", "CPIAUCSL")],
 )
 def test_fred_dispatch_keeps_only_a_same_series_series_id(series_id, sent) -> None:
     captured: Dict[str, Any] = {}
@@ -496,3 +499,81 @@ def test_requested_series_stamps_never_split_the_cache_key(stamps, with_plan_ide
     stamped = {**base, **stamps}
     assert svc._build_cache_params("FRED", stamped) == svc._build_cache_params("FRED", dict(base))
     assert not set(stamps) & set(svc._build_cache_params("FRED", stamped))
+
+
+# ---------------------------------------------------------------------------
+# FRED ``units`` legality: the ``:suffix`` vocabulary is FRED's documented one
+# ---------------------------------------------------------------------------
+
+from backend.providers.fred import FRED_UNITS_TRANSFORMS, fred_units_transform  # noqa: E402
+
+
+def test_fred_units_vocabulary_is_the_documented_one() -> None:
+    assert set(FRED_UNITS_TRANSFORMS) == {"chg", "ch1", "pch", "pc1", "pca", "cch", "cca", "log"}
+    for value in FRED_UNITS_TRANSFORMS:
+        assert fred_units_transform(value) == value
+        assert fred_units_transform(f" {value.upper()} ") == value
+    # Levels and anything outside the vocabulary are never sent.
+    for value in ("lin", "LIN", "", None, "yoy", "pct", "mom", "pc1x", "pc 1"):
+        assert fred_units_transform(value) is None
+
+
+@pytest.mark.parametrize("suffix", ["yoy", "lin", "LIN", "garbage"])
+def test_fred_contract_ignores_a_suffix_dispatch_would_drop(suffix) -> None:
+    intent = _intent("FRED", "CPIAUCSL", ["CPI"], {})
+    levels = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL"})
+    dropped = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL", "seriesId": f"CPIAUCSL:{suffix}"})
+    assert dropped == levels
+
+
+def test_fred_contract_normalizes_the_kept_suffix_case() -> None:
+    intent = _intent("FRED", "CPIAUCSL", ["CPI"], {})
+    upper = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL", "seriesId": "CPIAUCSL:PC1"})
+    lower = _provider_request_contract("FRED", intent, {"indicator": "CPIAUCSL", "seriesId": "CPIAUCSL:pc1"})
+    assert upper == lower and upper["transform"] == "pc1"
+
+
+def _fred_with_payloads(observations_params: list) -> FREDProvider:
+    fred = FREDProvider.__new__(FREDProvider)
+    fred.base_url = "https://api.stlouisfed.org/fred"
+    fred.api_key = "k"
+    fred.timeout = 30.0
+    fred._search_cache = {}
+    fred._series_existence_memo = {}
+    info = {"seriess": [{
+        "id": "CPIAUCSL", "title": "Consumer Price Index for All Urban Consumers: All Items in U.S. City Average",
+        "units": "Index 1982-1984=100", "frequency": "Monthly", "seasonal_adjustment": "Seasonally Adjusted",
+        "observation_start": "1947-01-01", "observation_end": "2026-09-01", "last_updated": "2026-10-15",
+    }]}
+    obs = {"observations": [{"date": "2026-08-01", "value": "1.2"}, {"date": "2026-09-01", "value": "1.3"}]}
+
+    async def _get(_client, url, params=None, **_kw):
+        if url.endswith("/series/observations"):
+            observations_params.append(dict(params or {}))
+            return SimpleNamespace(status_code=200, json=lambda: obs)
+        return SimpleNamespace(status_code=200, json=lambda: info)
+
+    fred._get_with_retry = _get
+    return fred
+
+
+@pytest.mark.parametrize(
+    "series_id,units,unit_label,data_type",
+    [
+        ("CPIAUCSL:ch1", "ch1", "Change from Year Ago, Index 1982-1984=100", "Change"),
+        ("CPIAUCSL:chg", "chg", "Change, Index 1982-1984=100", "Change"),
+        ("CPIAUCSL:pca", "pca", "Compounded Annual Rate of Change", "Percent Change"),
+        ("CPIAUCSL:pc1", "pc1", "Percent Change from Year Ago", "Percent Change"),
+        ("CPIAUCSL:yoy", None, "Index 1982-1984=100", "Index"),
+        ("CPIAUCSL:lin", None, "Index 1982-1984=100", "Index"),
+    ],
+)
+def test_fred_provider_sends_only_documented_units_and_labels_them(series_id, units, unit_label, data_type) -> None:
+    sent: list = []
+    fred = _fred_with_payloads(sent)
+    with patch("backend.providers.fred.get_http_client", return_value=SimpleNamespace()):
+        series = asyncio.run(fred.fetch_series({"indicator": "CPIAUCSL", "seriesId": series_id}))
+    assert sent and sent[0].get("units") == units
+    assert sent[0]["series_id"] == "CPIAUCSL"
+    assert series.metadata.unit == unit_label
+    assert series.metadata.dataType == data_type

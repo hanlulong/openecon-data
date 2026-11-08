@@ -151,6 +151,42 @@ def _fred_country_label(iso2: Optional[str]) -> Optional[str]:
     return _country_label_for_iso2(iso2)
 
 
+# FRED's documented ``units`` (observation data transformation) vocabulary —
+# https://fred.stlouisfed.org/docs/api/fred/series_observations.html#units.
+# A provider API parameter-legality table (structural): a ``:suffix`` on a
+# seriesId is sent as ``units`` only when it is one of these values; anything
+# else would make FRED answer HTTP 400 (or, before this table, be sent as-is).
+# Value -> (unit label template, title suffix, dataType). ``{native}`` is the
+# series' own units text, kept where FRED keeps it (absolute changes / log).
+# "lin" is FRED's "Levels (No transformation)", i.e. the untransformed series.
+FRED_UNITS_TRANSFORMS: Dict[str, Tuple[str, str, Optional[str]]] = {
+    "chg": ("Change, {native}", "(Change)", "Change"),
+    "ch1": ("Change from Year Ago, {native}", "(Change from Year Ago)", "Change"),
+    "pch": ("Percent Change", "(% Change)", "Percent Change"),
+    "pc1": ("Percent Change from Year Ago", "(YoY % Change)", "Percent Change"),
+    "pca": ("Compounded Annual Rate of Change", "(Compounded Annual Rate of Change)", "Percent Change"),
+    "cch": ("Continuously Compounded Rate of Change", "(Continuously Compounded Rate of Change)", "Percent Change"),
+    "cca": (
+        "Continuously Compounded Annual Rate of Change",
+        "(Continuously Compounded Annual Rate of Change)",
+        "Percent Change",
+    ),
+    "log": ("Natural Log", "(Log)", None),
+}
+
+
+def fred_units_transform(suffix: Any) -> Optional[str]:
+    """The FRED ``units`` value a seriesId ``:suffix`` names, else None.
+
+    Case-insensitive. Returns None for an empty suffix, for "lin" (levels:
+    the same payload as no transform, so it never splits cache identity) and
+    for any value outside FRED's documented vocabulary — such a suffix is
+    dropped, never sent.
+    """
+    value = str(suffix or "").strip().lower()
+    return value if value in FRED_UNITS_TRANSFORMS else None
+
+
 # Upper bound for metadata.about. FRED series notes range from one line to
 # several KB of methodology/citation text; "about" is display-only (rendered
 # collapsed as "About this series") but rides along in every API/MCP payload,
@@ -455,11 +491,18 @@ class FREDProvider(BaseProvider):
             Tuple of (series_id, transformation) where transformation can be None or 'pc1', 'pch', etc.
             Returns (None, None) if no series ID can be determined from direct parsing.
         """
-        # If explicit series ID provided, use it (check for transformation suffix)
+        # If explicit series ID provided, use it (check for transformation
+        # suffix; only FRED's documented ``units`` values survive).
         if series_id:
             if ":" in series_id:
-                parts = series_id.split(":", 1)
-                return parts[0], parts[1]
+                base, suffix = series_id.split(":", 1)
+                transformation = fred_units_transform(suffix)
+                if transformation is None and suffix.strip().lower() not in {"", "lin"}:
+                    logger.info(
+                        "FRED: dropping seriesId suffix %r on %s (not a FRED units value)",
+                        suffix, base,
+                    )
+                return base.strip(), transformation
             return series_id, None
 
         if not indicator:
@@ -758,16 +801,14 @@ class FREDProvider(BaseProvider):
         unit = info.get("units", "")
         indicator_title = info["title"]
 
-        # Override unit and title if transformation was applied
-        if transformation == "pc1":
-            unit = "Percent Change from Year Ago"
-            indicator_title = f"{info['title']} (YoY % Change)"
-        elif transformation == "pch":
-            unit = "Percent Change"
-            indicator_title = f"{info['title']} (% Change)"
-        elif transformation == "log":
-            unit = "Natural Log"
-            indicator_title = f"{info['title']} (Log)"
+        # Override unit and title when a transformation was applied, for
+        # every documented FRED units value (a ch1 payload is no longer
+        # labelled with the levels unit, e.g. "Index 1982-1984=100").
+        transform_spec = FRED_UNITS_TRANSFORMS.get(transformation or "")
+        if transform_spec is not None:
+            unit_template, title_suffix, _ = transform_spec
+            unit = unit_template.format(native=info.get("units", "") or "").rstrip(", ")
+            indicator_title = f"{info['title']} {title_suffix}"
 
         # Human-readable URL for data verification on FRED website
         source_url = f"https://fred.stlouisfed.org/series/{target_series}"
@@ -797,6 +838,10 @@ class FREDProvider(BaseProvider):
             data_type = "Rate"
         else:
             data_type = "Level"
+        if transform_spec is not None and transform_spec[2]:
+            # The transformation, not the levels series' title, says what the
+            # served values are (a CPI "Index" served as pc1 is a % change).
+            data_type = transform_spec[2]
 
         # Determine price type (real vs nominal)
         price_type = None

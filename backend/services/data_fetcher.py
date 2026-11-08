@@ -404,15 +404,19 @@ def _fred_series_id_base_matches(series_id: Any, indicator: Any) -> bool:
 
 def _fred_kept_series_transform(params: dict, code: Any) -> Optional[str]:
     """The ``:transform`` suffix of a seriesId that FRED dispatch KEEPS (its
-    base equals the resolved code). Dispatch and the provider_request contract
-    share this so a year-over-year (``:pc1``) payload never shares a cache key
-    with the levels payload of the same code."""
+    base equals the resolved code AND the suffix is one of FRED's documented
+    ``units`` values). Dispatch and the provider_request contract share this
+    so a year-over-year (``:pc1``) payload never shares a cache key with the
+    levels payload of the same code, while an unknown suffix ("yoy") — which
+    dispatch drops — never splits it either."""
+    from ..providers.fred import fred_units_transform
+
     for key in ("seriesId", "series_id"):
         raw = str((params or {}).get(key) or "").strip()
         if ":" in raw and _fred_series_id_base_matches(raw, code):
-            suffix = raw.split(":", 1)[1].strip().lower()
-            if suffix:
-                return suffix
+            transform = fred_units_transform(raw.split(":", 1)[1])
+            if transform:
+                return transform
     return None
 
 
@@ -2660,6 +2664,7 @@ async def fetch_from_provider_dispatch(
             # (case-insensitively) so a ":pc1"-style transform on the locked
             # code survives; the contract keys on it (_fred_kept_series_transform).
             _fred_indicator = str(fred_params.get("indicator") or "").strip()
+            _fred_transform = _fred_kept_series_transform(fred_params, _fred_indicator)
             for _sid_key in ("seriesId", "series_id"):
                 _sid = fred_params.get(_sid_key)
                 if not _sid:
@@ -2667,9 +2672,13 @@ async def fetch_from_provider_dispatch(
                 if not _fred_series_id_base_matches(_sid, _fred_indicator):
                     fred_params.pop(_sid_key, None)
                     continue
-                # Same series: send the resolved code's spelling + the suffix.
-                _base, _sep, _suffix = str(_sid).strip().partition(":")
-                fred_params[_sid_key] = f"{_fred_indicator}{_sep}{_suffix}" if _sep else _fred_indicator
+                # Same series: send the resolved code's spelling, plus the
+                # suffix only when it is a documented FRED ``units`` value
+                # (the same rule the contract keys on); any other suffix is
+                # dropped instead of being sent as an illegal ``units``.
+                fred_params[_sid_key] = (
+                    f"{_fred_indicator}:{_fred_transform}" if _fred_transform else _fred_indicator
+                )
             series = await svc.fred_provider.fetch_series(fred_params)
             _validate_fred_country_scope_result([series], fred_request, fred_params)
             return [series]
