@@ -54,6 +54,7 @@ from .models import (
 )
 from contextlib import asynccontextmanager
 from .services.auth_factory import get_auth_service_singleton
+from .services.mock_auth import allow_test_user_setting
 from .services.supabase_service import get_supabase_service
 from fastapi.security import HTTPBearer
 from .services.cache import cache_service
@@ -2959,14 +2960,16 @@ async def export_endpoint(request: ExportRequest) -> Response:
     if request.format not in {"csv", "json", "dta"}:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Format must be csv, json, or dta"})
 
+    # Generation is CPU-bound (up to 200,000 points); run it in a worker
+    # thread so one large export does not stall every request on this worker.
     if request.format == "csv":
-        content = export_service.generate_csv(request.data)
+        content = await asyncio.to_thread(export_service.generate_csv, request.data)
         media_type = "text/csv"
     elif request.format == "dta":
-        content = export_service.generate_dta(request.data)
+        content = await asyncio.to_thread(export_service.generate_dta, request.data)
         media_type = "application/x-stata-dta"
     else:
-        content = export_service.generate_json(request.data)
+        content = await asyncio.to_thread(export_service.generate_json, request.data)
         media_type = "application/json"
 
     filename = request.filename or export_service.generate_filename(request.data, request.format)
@@ -3013,20 +3016,20 @@ async def debug_conversation_state(
     conversation_id: str,
     user: User = Depends(get_required_user),
 ):
-    """Debug endpoint: inspect conversation state for a given ID. Dev-only.
+    """Debug endpoint: inspect the caller's own conversation state. Dev-only.
 
-    SECURITY: previously gated solely on ALLOW_TEST_USER env var. An accidental
-    production flag flip would expose every conversation's state (including
-    other users') to anonymous callers. Now requires authentication AND the
-    dev gate.
+    SECURITY: answers only when dev mode is on AND ALLOW_TEST_USER is exactly
+    "true" (parsed like mock auth, so "false" or "0" keep it off), and only
+    for a conversation owned by the authenticated caller. Everything else,
+    including a missing ID, gets the same 404, so the route cannot be used to
+    probe which conversation IDs exist.
     """
-    # Only available when ALLOW_TEST_USER is set (development/testing)
-    import os as _os
-    if not _os.getenv("ALLOW_TEST_USER"):
-        return JSONResponse(status_code=404, content={"error": "Not found"})
+    not_found = JSONResponse(status_code=404, content={"error": "Not found"})
+    if not (settings.dev_mode and allow_test_user_setting() is True):
+        return not_found
     ctx = conversation_manager._get(conversation_id)
-    if not ctx:
-        return {"found": False, "conversation_id": conversation_id}
+    if not ctx or getattr(ctx, "owner_key", None) != f"user:{user.id}":
+        return not_found
     state = ctx.conversation_state
     return {
         "found": True,

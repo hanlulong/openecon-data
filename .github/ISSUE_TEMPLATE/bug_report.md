@@ -21,3 +21,11 @@ What happened instead? (Error message, wrong data, no response, etc.)
 - [ ] Hosted app (data.openecon.ai)
 - [ ] Self-hosted (localhost)
 - Browser:
+- MCP client and version (Claude Code / Codex / Coze / other):
+- Transport (Streamable HTTP MCP / SSE MCP / HTTP API / web app):
+- Approximate time of the request (UTC):
+
+**Data looks wrong?**
+- Provider (e.g., FRED, World Bank):
+- Series code (e.g., UNRATE):
+- `sourceUrl` from the response:

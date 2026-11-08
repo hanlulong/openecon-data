@@ -11,38 +11,24 @@ from ..models import Metadata, NormalizedData
 from ..routing.country_resolver import CountryResolver
 from ..utils.retry import DataNotAvailableError
 from ..services.http_pool import get_http_client
+from ..services.time_range_defaults import _user_set_time_scope
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-
-_TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
-_TIME_SCOPE_RELATIVE_RE = re.compile(
-    r"\b(?:last|past|since|between|from|through|until|before|after|during)\b",
-    flags=re.IGNORECASE,
-)
-_RECENCY_CUE_RE = re.compile(
-    r"\b(?:latest|most recent|current|currently|today|yesterday|now)\b",
-    flags=re.IGNORECASE,
-)
-
-
-def _query_has_explicit_time_scope(query: str) -> bool:
-    """Detect whether the user explicitly constrained the requested time window."""
-    query_text = str(query or "").strip()
-    if not query_text:
-        return False
-    if _RECENCY_CUE_RE.search(query_text):
-        return True
-    if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
-        return True
-    if re.search(
-        r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
-        query_text,
-        flags=re.IGNORECASE,
-    ):
-        return True
-    return False
+# FRED `units` transformation codes (series/observations API) -> the data type
+# the transformed values actually have. "lin" is FRED's untransformed level,
+# so it (and any unknown code) keeps the type derived from the series title.
+_FRED_TRANSFORM_DATA_TYPES = {
+    "chg": "Change",
+    "ch1": "Change",
+    "pch": "Percent Change",
+    "pc1": "Percent Change",
+    "pca": "Percent Change",
+    "cch": "Percent Change",
+    "cca": "Percent Change",
+    "log": "Level",
+}
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -558,7 +544,7 @@ class FREDProvider(BaseProvider):
         ):
             return False
 
-        if _query_has_explicit_time_scope(str(params.get("__original_query") or "")):
+        if _user_set_time_scope(params, str(params.get("__original_query") or "")):
             return False
 
         requested_start = _parse_iso_date(params.get("startDate"))
@@ -642,7 +628,7 @@ class FREDProvider(BaseProvider):
                 params.get("__exact_indicator_title_match")
                 or params.get("__exact_provider_code_match")
             )
-            and not _query_has_explicit_time_scope(str(params.get("__original_query") or ""))
+            and not _user_set_time_scope(params, str(params.get("__original_query") or ""))
             and not observations
             and (obs_params.get("observation_start") or obs_params.get("observation_end"))
         ):
@@ -678,6 +664,10 @@ class FREDProvider(BaseProvider):
             api_url_params["observation_start"] = effective_params["startDate"]
         if effective_params.get("endDate"):
             api_url_params["observation_end"] = effective_params["endDate"]
+        if transformation:
+            # Same transformation the observations call used, so the public
+            # URL reproduces the served values.
+            api_url_params["units"] = transformation
 
         query_string = "&".join(f"{key}={value}" for key, value in api_url_params.items())
         api_url = f"{self.base_url}/series/observations?{query_string}&api_key=***"
@@ -724,6 +714,11 @@ class FREDProvider(BaseProvider):
             data_type = "Rate"
         else:
             data_type = "Level"
+        # A units transformation changes what the values are (CPIAUCSL:pc1 is a
+        # percent change, not an index), whatever the series title says.
+        data_type = _FRED_TRANSFORM_DATA_TYPES.get(
+            str(transformation or "").strip().lower(), data_type
+        )
 
         # Determine price type (real vs nominal)
         price_type = None
@@ -769,7 +764,7 @@ class FREDProvider(BaseProvider):
 
         metadata = Metadata(
             source="FRED",
-            indicator=info["title"],
+            indicator=indicator_title,
             country=inferred_country,
             frequency=self._map_frequency(info["frequency"]),
             unit=unit,

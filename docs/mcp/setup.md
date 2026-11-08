@@ -59,7 +59,7 @@ Then verify:
 
 ```bash
 curl http://localhost:3001/api/health
-curl http://localhost:3001/mcp
+curl -N --max-time 3 http://localhost:3001/mcp   # expect an `event: endpoint` line
 ```
 
 ## Troubleshooting

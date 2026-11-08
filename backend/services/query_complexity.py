@@ -7,6 +7,7 @@ import re
 import logging
 
 from ..models import ParsedIntent
+from ..utils.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,11 @@ class QueryComplexityAnalyzer:
 
         Returns a user-friendly error message with context and suggestions
         """
+        # Defence in depth: provider errors are redacted where they are built,
+        # but this text is shown to users, so mask credential-named parameters
+        # again before any of it is echoed or truncated.
+        error = redact_secrets(str(error or ""))
+
         # Analyze query complexity
         analysis = QueryComplexityAnalyzer.detect_complexity(query, intent)
 

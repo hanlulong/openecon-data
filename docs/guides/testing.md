@@ -5,12 +5,12 @@ Use this checklist to verify that openecon-data is healthy after installation or
 ## 1. Backend quick checks
 
 ```bash
-# Recommended: use the restart script
-python3 scripts/restart_dev.py --backend
+# From the repo root, backend only:
+source backend/.venv/bin/activate              # Windows: backend\.venv\Scripts\activate
+npm run dev:backend                            # uvicorn backend.main:app --reload --port 3001
 
-# Or manually:
-source backend/.venv/bin/activate              # Windows: .venv\Scripts\activate
-uvicorn backend.main:app --reload --port 3001
+# Or backend and frontend together:
+npm run dev
 ```
 
 ### Health endpoint
@@ -106,7 +106,7 @@ You should see the registered user profile and an empty history array (fill by i
 
 ## 5. Troubleshooting tips
 
-- **401 from /api/query**: ensure `OPENROUTER_API_KEY` is present and the backend was restarted after editing `.env` (`python3 scripts/restart_dev.py --backend`).
+- **401 from /api/query**: ensure `OPENROUTER_API_KEY` is present and the backend was restarted after editing `.env` (Ctrl+C, then `npm run dev` again).
 - **FRED data missing**: add `FRED_API_KEY` and restart the backend; the health endpoint will confirm the flag.
 - **Clipboard errors in the browser**: browsers block clipboard access on non-secure contexts when not triggered by a user gesture; the copy buttons must be clicked directly.
 

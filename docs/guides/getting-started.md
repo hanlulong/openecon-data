@@ -49,23 +49,24 @@ The defaults above use OpenRouter's hosted `openai/gpt-4o-mini` for zero-setup; 
 
 Tip: instead of writing `.env` by hand, run `./scripts/setup.sh` (or `cp .env.example .env`) and edit the generated file.
 
-Restart the backend after editing secrets (use `python3 scripts/restart_dev.py --backend`).
+Restart the servers after editing secrets: press Ctrl+C in the terminal running `npm run dev`, then run it again.
 
-No manual database/index bootstrap is required for local setup:
-- `backend/data/indicators.db` is created if missing
+Notes on local data and services:
+- `backend/data/indicators.db` is created with an empty schema if it is missing, so the backend starts without it. To populate the full indicator catalogue, run `python scripts/fetch_all_indicators.py` from the repo root with the virtual environment activated (`--provider <name>` fetches one provider, `--stats` shows current counts). It needs network access, FRED coverage needs `FRED_API_KEY`, and the resulting file is about 827 MB.
 - `backend/data/faiss_index` is created/rebuilt on demand when vector search is enabled
 - Supabase is optional in development (mock auth is used when Supabase is not configured). With mock auth, a dev test user is available by default: `test@example.com` / `testpass123` (disable with `ALLOW_TEST_USER=false`). Google sign-in, email verification, and password reset require Supabase.
 - Redis is optional — the backend tries `redis://localhost:6379/0` and falls back to in-memory caching if Redis is not running
 
 ## 4. Run the stack
 
-Use the restart script (recommended):
+From the repository root, with the backend virtual environment activated (`npm run dev` runs `uvicorn` from your PATH):
 
 ```bash
-python3 scripts/restart_dev.py
+source backend/.venv/bin/activate    # Windows: backend\.venv\Scripts\activate
+npm run dev
 ```
 
-This starts both the backend (port 3001) and frontend (port 5173). Vite proxies `/api/*` requests to `http://localhost:3001`, so no extra configuration is required.
+This starts both the backend (port 3001) and frontend (port 5173). To restart, press Ctrl+C and run `npm run dev` again. Vite proxies `/api/*` requests to `http://localhost:3001`, so no extra configuration is required.
 
 ## 5. Smoke test
 

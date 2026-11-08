@@ -32,6 +32,7 @@ import {
 } from 'recharts'
 
 import { Badge } from '@/components/ui/badge'
+import { FredNotice } from '@/components/FredNotice'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 
@@ -1269,6 +1270,10 @@ export function LandingPage() {
             </a>
           </div>
         </div>
+        <FredNotice
+          className="mx-auto mt-3 max-w-7xl px-4 text-center text-[11px] leading-relaxed text-gray-500 sm:text-xs lg:px-5"
+          linkClassName="underline hover:text-gray-900"
+        />
       </footer>
     </div>
   )

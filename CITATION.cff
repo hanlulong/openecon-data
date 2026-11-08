@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "OpenEcon Data"
+authors:
+  - family-names: Han
+    given-names: Lu
+    website: "https://luhan.io/"
+license: AGPL-3.0-or-later
+repository-code: "https://github.com/hanlulong/openecon-data"
+url: "https://data.openecon.ai"

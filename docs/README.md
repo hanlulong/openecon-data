@@ -147,7 +147,6 @@ Guides for developers contributing to OpenEcon Data.
 | [FAISS vs ChromaDB](development/FAISS_VS_CHROMADB_DECISION.md) | Vector search architecture decision |
 | [Indicator Resolution](INDICATOR_RESOLUTION.md) | Indicator resolution pipeline (current) |
 | [Routing Improvements](development/ROUTING_IMPROVEMENTS.md) | Query routing logic (superseded by UnifiedRouter) |
-| [Prompt Architecture](PROMPT_ARCHITECTURE_IMPROVEMENTS.md) | LLM prompt design (superseded by UnifiedRouter) |
 
 ### Performance & Optimization
 
@@ -180,7 +179,6 @@ Guides for deploying OpenEcon Data to production.
 
 | Document | Description |
 |----------|-------------|
-| [Deployment Summary](DEPLOYMENT_SUMMARY.md) | Production deployment overview |
 | [Apache Pro Mode Setup](deployment/apache-promode-setup.md) | Apache2 configuration for Pro Mode |
 
 ### Environment Configuration
