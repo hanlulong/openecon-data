@@ -2328,10 +2328,16 @@ class QueryService:
         """The model judge's ACCEPTANCE decision for a cross-provider fallback.
 
         True: a confident "match" (semantic_match_judge.judgment_accepts).
-        False: "mismatch", "uncertain" or a low-confidence match.
-        None: the judge is unavailable (no LLM, failure, timeout, or too little
-        request time left to run it) -- the caller keeps its non-LLM decision
-        so an LLM outage does not cascade into rejecting every fallback.
+        False: "mismatch", "uncertain" or a low-confidence match -- and also
+        when the request deadline leaves no time to run the judge. Running
+        out of request time is not an LLM outage: accepting on the keyword
+        gate alone there is exactly the wrong-data path the judge closes, so
+        the candidate is refused and a no-verdict primary ends in the honest
+        outage answer.
+        None: the LLM itself is unavailable (no LLM, open local-LLM circuit,
+        failure, or the judge's own timeout) -- the caller keeps its non-LLM
+        decision so an LLM outage does not cascade into rejecting every
+        fallback.
 
         Bounded by the request budget: a small fixed cap, clamped by the
         remaining I/O time (deadline minus the answer reserve).
@@ -2339,10 +2345,11 @@ class QueryService:
         timeout_s = _smj_bounded_judge_timeout()
         if timeout_s is None:
             logger.warning(
-                "Fallback judge unavailable for %s: only %.1fs of request time left",
+                "Fallback judge skipped for %s: only %.1fs of request time left; "
+                "refusing the unjudged candidate",
                 fallback_provider, io_remaining() or 0.0,
             )
-            return None
+            return False
         semantic_query = str(semantic_query or "").strip()
         original_indicators = list(dict.fromkeys(
             str(item).strip()
@@ -4803,9 +4810,11 @@ class QueryService:
 
         def _disclose_substitution(result: Optional[list]) -> Optional[list]:
             """Prepend a localized "served by <other provider>" transparency
-            note (the metadata.notes convention) when no served series comes
-            from the primary provider. Copies, never mutates: the series may
-            be shared with the provider-result cache."""
+            note (the metadata.notes convention) to EVERY served series when
+            none comes from the primary provider -- later projection (e.g. a
+            top-N ranking) may drop any one of them, so the disclosure cannot
+            live on result[0] alone. Copies, never mutates: the series may be
+            shared with the provider-result cache."""
             if not result:
                 return result
             serving = [
@@ -4822,14 +4831,18 @@ class QueryService:
                 primary=primary_names["provider"], Primary=primary_names["Provider"],
                 serving=self._provider_display_names(serving, language),
             )
-            first = result[0]
-            metadata = getattr(first, "metadata", None)
-            if not note or metadata is None or note in (metadata.notes or []):
+            if not note:
                 return result
-            decorated = first.model_copy(update={
-                "metadata": metadata.model_copy(update={"notes": [note] + list(metadata.notes or [])}),
-            })
-            return [decorated, *result[1:]]
+            decorated = []
+            for series in result:
+                metadata = getattr(series, "metadata", None)
+                if metadata is None or note in (metadata.notes or []):
+                    decorated.append(series)
+                    continue
+                decorated.append(series.model_copy(update={
+                    "metadata": metadata.model_copy(update={"notes": [note] + list(metadata.notes or [])}),
+                }))
+            return decorated
 
         def _serve(result: Optional[list]) -> Optional[list]:
             return _restamp_intent_to_serving_provider(_disclose_substitution(result))

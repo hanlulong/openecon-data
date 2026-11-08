@@ -159,6 +159,28 @@ def test_judge_match_serves_the_fallback_with_a_substitution_note(service):
     assert intent.apiProvider == "WORLDBANK"
 
 
+def test_substitution_note_is_on_every_served_series_and_survives_ranking(service):
+    """A top-N projection may drop result[0]; every served series carries the
+    note (each on a copy), so no projection can strip the disclosure."""
+    served = [
+        _series(source="World Bank", sid="SL.UEM.TOTL.ZS", indicator="Unemployment", country=country)
+        for country in ("United States", "Japan", "Germany")
+    ]
+    served[1].metadata.notes = ["Existing coverage note."]
+    result = _run_fallback(service, _fred_intent(), ProviderUnavailable("down"),
+                           AsyncMock(return_value=served),
+                           AsyncMock(return_value=_judgment("match", 0.95)))
+    note = "FRED could not serve this request, so this data comes from World Bank instead."
+    assert [series.metadata.notes[0] for series in result] == [note, note, note]
+    assert result[1].metadata.notes == [note, "Existing coverage note."]
+    # Copies only: the fetched (cacheable) objects are untouched.
+    assert served[0].metadata.notes is None and served[2].metadata.notes is None
+    assert served[1].metadata.notes == ["Existing coverage note."]
+    assert all(a is not b for a, b in zip(result, served))
+    # Any projection keeps the disclosure (e.g. keep only the last series).
+    assert note in result[-1:][0].metadata.notes
+
+
 @pytest.mark.parametrize("judgment", [
     _judgment("mismatch", 0.96),
     _judgment("uncertain", 0.9),
@@ -225,10 +247,13 @@ def test_parallel_fallbacks_prefer_the_first_judged_match(service):
     assert result[0].metadata.seriesId == "IMF.GOOD"
 
 
-def test_judge_not_run_when_too_little_request_time_is_left(service, clock):
-    """The fallback fetch used up the time: the judge is unavailable (keyword
-    decision kept) instead of starting an LLM call into the answer reserve."""
-    judge = AsyncMock(return_value=_judgment("mismatch", 0.99))
+def test_deadline_skipped_judge_refuses_the_fallback(service, clock):
+    """The fallback fetch used up the time: the judge is not started (no LLM
+    call into the answer reserve) and the unjudged candidate is REFUSED --
+    running out of request time is not an LLM outage, so the keyword gate's
+    accept must not stand alone (that is the wrong-data path)."""
+    judge = AsyncMock(return_value=_judgment("match", 0.99))
+    primary = ProviderUnavailable("down")
 
     async def _slow_fetch(intent, execution_plan=None):
         clock.now += 27.5  # 30s budget, 1s answer reserve: 1.5s of I/O time left
@@ -236,19 +261,75 @@ def test_judge_not_run_when_too_little_request_time_is_left(service, clock):
 
     async def _go():
         with request_budget(30, answer_reserve_seconds=1, retry_reserve_seconds=5):
-            return await service._try_with_fallback(_trade_intent(), ProviderUnavailable("down"))
+            return await service._try_with_fallback(_trade_intent(), primary)
 
     patches = _fallback_patches(service, AsyncMock(side_effect=_slow_fetch))
     patches.append(patch.object(query_module, "_smj_judge_fallback_result", new=judge))
     for p in patches:
         p.start()
     try:
-        result = asyncio.run(_go())
+        with pytest.raises(ProviderUnavailable) as info:
+            asyncio.run(_go())
     finally:
         for p in reversed(patches):
             p.stop()
     judge.assert_not_awaited()
-    assert result
+    assert info.value is primary
+
+
+def test_deadline_skip_is_a_reject_but_llm_unavailability_is_not(service, clock):
+    """_judge_fallback_match: False when only the deadline prevented judging;
+    None (keyword decision stands) only when the LLM itself is unavailable."""
+    unavailable = AsyncMock(return_value=None)
+    with patch.object(query_module, "_smj_judge_fallback_result", new=unavailable):
+        async def _judge_with(total):
+            with request_budget(total, answer_reserve_seconds=10, retry_reserve_seconds=10):
+                return await service._judge_fallback_match(
+                    _trade_intent(), "WORLDBANK", [_series()], "exports",
+                )
+
+        assert asyncio.run(_judge_with(11)) is False   # 1s of I/O time: skipped -> reject
+        unavailable.assert_not_awaited()
+        assert asyncio.run(_judge_with(60)) is None    # judge ran, LLM unavailable
+        unavailable.assert_awaited_once()
+
+
+def test_deadline_skip_on_the_delta_path_ends_in_the_outage_answer(service, clock):
+    """The production shape: Comtrade gives no verdict, the World Bank
+    fallback returns the high-tech share with no time left to judge it, and
+    the user gets the honest outage answer -- never the unjudged series."""
+    intent = _trade_intent()
+
+    async def _fetch(fetch_intent, execution_plan=None):
+        if fetch_intent.apiProvider == "COMTRADE":
+            raise ProviderUnavailable("Connection failed after 3 HTTP attempts")
+        clock.now += 39.5  # 50s budget, 10s answer reserve: 0.5s of I/O time left
+        return [_series()]
+
+    valid = ValidationResult(is_multi_indicator=False, is_valid=True, validation_error=None,
+                             suggestions=None, is_confident=True, confidence_reason=None)
+    parse = ParseRouteResult(intent=intent, explicit_provider=None, routed_provider="COMTRADE",
+                             validation_warning=None)
+    judge = AsyncMock(return_value=_judgment("match", 0.99))
+
+    async def _go():
+        with request_budget(50, answer_reserve_seconds=10, retry_reserve_seconds=10):
+            return await service._execute_resolved_intent(
+                "China exports to US 2024", "conv-deadline", intent, parse,
+                skip_prefetch_clarification=True, skip_post_fetch_clarification=True,
+            )
+
+    with patch.object(service.pipeline, "validate_intent", return_value=valid), \
+         patch.object(service, "_fetch_data", new=AsyncMock(side_effect=_fetch)), \
+         patch.object(service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
+         patch.object(service, "_select_indicator_query_for_resolution", return_value="exports"), \
+         patch.object(service, "_is_fallback_relevant", return_value=True), \
+         patch.object(service, "_get_stale_from_cache", new=AsyncMock(return_value=None)), \
+         patch.object(query_module, "_smj_judge_fallback_result", new=judge):
+        response = asyncio.run(_go())
+    judge.assert_not_awaited()
+    assert response.error == "provider_unavailable"
+    assert not response.data
 
 
 def test_judge_timeout_is_clamped_by_the_request_budget(service, clock):

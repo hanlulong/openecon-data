@@ -68,10 +68,11 @@ def structured_completion_kwargs(settings: Any, answer_tokens: int) -> Dict[str,
     the configured LLM, given the tokens the JSON answer itself needs.
 
     Reasoning models spend completion tokens on reasoning BEFORE the JSON
-    answer. On vLLM two controls keep that bounded (the same pair
-    VLLMProvider.generate applies on the manual path): ``reasoning_effort=low``
-    caps the ramble at the source, and reasoning headroom on top of the answer
-    budget stops residual long-reasoning cases from truncating mid-JSON
+    answer. On vLLM two controls keep that bounded: ``reasoning_effort=low``
+    caps the ramble at the source (VLLMProvider.generate adds that one itself
+    on the manual path, but not the headroom: a manual-path caller passes
+    this ``max_tokens``), and reasoning headroom on top of the answer budget
+    stops residual long-reasoning cases from truncating mid-JSON
     (finish_reason=length fails validation and burns a whole Instructor retry).
     Every Instructor call on the configured model goes through this, so a
     small judge gets the same treatment as the parse.
