@@ -224,7 +224,13 @@ class ExportService:
         if "date" in df.columns:
             converted = _stata_date_column(df["date"].tolist())
             if converted is not None:
-                df["date"] = pd.to_datetime(pd.Series(converted, dtype="object"))
+                try:
+                    df["date"] = pd.to_datetime(pd.Series(converted, dtype="object"))
+                except (pd.errors.OutOfBoundsDatetime, OverflowError):
+                    # Outside pandas' datetime64[ns] range (before 1677-09 or
+                    # after 2262-04, e.g. long historical series): keep the
+                    # provider's labels instead of failing the whole export.
+                    pass
 
         # Write to bytes buffer
         buffer = io.BytesIO()

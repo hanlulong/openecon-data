@@ -160,3 +160,13 @@ def test_other_date_labels_stay_strings(labels, multi):
     dates = _dta_dates(labels, multi)
     assert sorted(dates) == sorted(labels)
     assert not any(pd.isna(d) for d in dates)
+
+
+@pytest.mark.parametrize("dates", [["1500-01-01", "1600-01-01"], ["2300-01-01", "2400-01-01"]])
+def test_dta_keeps_labels_outside_pandas_datetime_range(dates):
+    # Long historical series parse as dates but cannot be datetime64[ns]
+    # (1677-09..2262-04); the export must keep the labels, not raise.
+    for data in ([_series("A", "US", dates)], [_series("A", "US", dates), _series("B", "CA", dates)]):
+        df = _read_dta(svc.generate_dta(data))
+        assert len(df) == 2
+        assert [str(v)[:4] for v in df["date"]] == [d[:4] for d in dates]
