@@ -5,13 +5,87 @@ import io
 import json
 import re
 import unicodedata
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 import pandas as pd
 
 from ..models import NormalizedData
+
+# Date-label shapes the providers emit, each with its granularity. Labels are
+# converted to datetimes for Stata only when every non-empty label matches one
+# of these and all share one granularity; otherwise the original strings are
+# kept, so a valid label never becomes a missing value.
+_QUARTER_START_MONTH = {"1": 1, "2": 4, "3": 7, "4": 10}
+_DATE_LABEL_SHAPES: Tuple[Tuple["re.Pattern[str]", str], ...] = (
+    (re.compile(r"(\d{4})"), "year"),                                    # 2020
+    (re.compile(r"(\d{4})-?Q([1-4])", re.IGNORECASE), "quarter"),        # 2020-Q1, 2020Q1
+    (re.compile(r"(\d{4})-?M(\d{1,2})", re.IGNORECASE), "month"),       # 2020M01, 2020-M01
+    (re.compile(r"(\d{4})-(\d{2})"), "month"),                          # 2020-01
+    (re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})"), "day"),             # 2020-01-31, 2020/01/31
+    (
+        re.compile(
+            r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?"
+            r"(Z|[+-]\d{2}:?\d{2})?",
+            re.IGNORECASE,
+        ),
+        "datetime",                                                     # ISO timestamps
+    ),
+)
+
+
+def _parse_date_label(label: str) -> Optional[Tuple[datetime, str]]:
+    """Parse one provider date label to (naive UTC datetime, granularity)."""
+    text = label.strip()
+    for pattern, granularity in _DATE_LABEL_SHAPES:
+        match = pattern.fullmatch(text)
+        if not match:
+            continue
+        try:
+            if granularity == "year":
+                return datetime(int(match.group(1)), 1, 1), granularity
+            if granularity == "quarter":
+                return datetime(int(match.group(1)), _QUARTER_START_MONTH[match.group(2)], 1), granularity
+            if granularity == "month":
+                return datetime(int(match.group(1)), int(match.group(2)), 1), granularity
+            if granularity == "day":
+                return datetime(*(int(match.group(i)) for i in (1, 2, 3))), granularity
+            year, month, day, hour, minute = (int(match.group(i)) for i in range(1, 6))
+            fraction = (match.group(7) or ".")[1:]
+            parsed = datetime(
+                year, month, day, hour, minute, int(match.group(6) or 0),
+                int((fraction + "000000")[:6]),
+            )
+            offset = match.group(8)
+            if offset and offset.upper() != "Z":
+                # Stata has no time zones: store the UTC wall time.
+                digits = offset[1:].replace(":", "")
+                delta = timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+                parsed = parsed - delta if offset[0] == "+" else parsed + delta
+            return parsed, granularity
+        except ValueError:
+            return None
+    return None
+
+
+def _stata_date_column(labels: List[object]):
+    """Datetimes for the .dta date column, or None to keep the strings."""
+    parsed = []
+    granularities = set()
+    for label in labels:
+        text = "" if label is None else str(label)
+        if not text.strip():
+            parsed.append(None)
+            continue
+        result = _parse_date_label(text)
+        if result is None:
+            return None
+        parsed.append(result[0])
+        granularities.add(result[1])
+    if len(granularities) != 1:
+        return None
+    return parsed
 
 
 class ExportService:
@@ -69,6 +143,7 @@ class ExportService:
                     self._slug(series.metadata.indicator),
                 ]
                 column_names.append("_".join(filter(None, parts)) or "series")
+            column_names = self._unique_column_names(column_names)
 
             writer = csv.DictWriter(
                 buffer,
@@ -115,38 +190,41 @@ class ExportService:
                 for point in series.data
             ])
         else:
-            # Multiple series - wide format with date as index
+            # Multiple series - wide format with date as index. Column names
+            # and a date -> value map are built once per series, so this is
+            # O(dates x series) rather than a scan of every series per date.
             all_dates = sorted({dp.date for series in data for dp in series.data})
+            column_names = []
+            series_maps = []
+            for series in data:
+                parts = [
+                    self._slug(series.metadata.seriesId),
+                    self._slug(series.metadata.country),
+                    self._slug(series.metadata.indicator),
+                ]
+                column_names.append("_".join(filter(None, parts)) or "series")
+                series_maps.append({dp.date: dp.value for dp in series.data})
+            # Stata variable names have max 32 chars
+            column_names = self._unique_column_names(column_names, max_length=32)
 
-            # Build column data
             rows = []
             for date in all_dates:
                 row = {"date": self._csv_safe(date)}
-                for series in data:
-                    # Create column name from series metadata
-                    parts = [
-                        self._slug(series.metadata.seriesId),
-                        self._slug(series.metadata.country),
-                        self._slug(series.metadata.indicator),
-                    ]
-                    col_name = "_".join(filter(None, parts)) or "series"
-                    # Stata variable names have max 32 chars
-                    col_name = col_name[:32]
-
-                    # Find value for this date
-                    value = None
-                    for dp in series.data:
-                        if dp.date == date:
-                            value = dp.value
-                            break
-                    row[col_name] = value
+                for name, mapping in zip(column_names, series_maps):
+                    row[name] = mapping.get(date)
                 rows.append(row)
 
             df = pd.DataFrame(rows)
 
-        # Convert date column to datetime for better Stata compatibility
+        # Convert the date column to datetimes for Stata only when every label
+        # parses and all share one granularity (see _stata_date_column);
+        # otherwise keep the provider's strings rather than writing missing
+        # values. The old pd.to_datetime(errors="coerce") turned "2020M01" and
+        # the "2020-06" in a mixed annual/monthly export into NaT.
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            converted = _stata_date_column(df["date"].tolist())
+            if converted is not None:
+                df["date"] = pd.to_datetime(pd.Series(converted, dtype="object"))
 
         # Write to bytes buffer
         buffer = io.BytesIO()
@@ -188,6 +266,31 @@ class ExportService:
         if text and text.lstrip("\t\r")[:1] in ("=", "+", "-", "@"):
             return "'" + text
         return text
+
+    @staticmethod
+    def _unique_column_names(bases: List[str], max_length: Optional[int] = None) -> List[str]:
+        """Return one distinct column name per series, in order.
+
+        Each name is its base (truncated to ``max_length``). Only a name that
+        collides with an earlier one, or with the ``date`` column, gets a
+        ``_2``, ``_3``, ... suffix, trimming the base so the result still fits
+        ``max_length``. Without this, two series with the same slug (or the
+        same first 32 characters in Stata) shared one dict key and the
+        earlier series was silently dropped.
+        """
+        used = {"date"}
+        names: List[str] = []
+        for base in bases:
+            name = base[:max_length] if max_length else base
+            counter = 2
+            while name in used:
+                suffix = f"_{counter}"
+                stem = base[: max_length - len(suffix)] if max_length else base
+                name = f"{stem}{suffix}"
+                counter += 1
+            used.add(name)
+            names.append(name)
+        return names
 
     @staticmethod
     def _slug(value: Optional[str], limit: Optional[int] = None) -> str:

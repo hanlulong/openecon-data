@@ -4,7 +4,7 @@ Base URL: `http://localhost:3001` (dev) | `https://data.openecon.ai` (prod)
 
 All endpoints are prefixed with `/api` unless noted otherwise.
 
-**Interactive docs (public):** the API ships auto-generated interactive documentation — Swagger UI at `/docs`, ReDoc at `/redoc`, and the raw OpenAPI schema at `/openapi.json`.
+**Interactive docs (public):** the API ships auto-generated interactive documentation — Swagger UI at `/docs`, ReDoc at `/redoc`, and the raw OpenAPI schema at `/api/openapi.json`.
 
 ---
 

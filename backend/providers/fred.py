@@ -12,49 +12,11 @@ from ..models import Metadata, NormalizedData
 from ..routing.country_resolver import CountryResolver
 from ..utils.retry import DataNotAvailableError
 from ..services.http_pool import get_http_client
+from ..services.time_range_defaults import _user_set_time_scope
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-
-_TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
-_TIME_SCOPE_RELATIVE_RE = re.compile(
-    r"\b(?:last|past|since|between|from|through|until|before|after|during)\b",
-    flags=re.IGNORECASE,
-)
-_RECENCY_CUE_RE = re.compile(
-    r"\b(?:latest|most recent|current|currently|today|yesterday|now)\b",
-    flags=re.IGNORECASE,
-)
-
-
-def _user_set_time_scope(params: dict) -> bool:
-    """Stamp-first: the recorded __time_scope_authority decides; the English
-    text heuristic below runs only for unstamped (legacy) params."""
-    from ..services.time_scope_provenance import stamped_user_time_scope
-
-    stamped = stamped_user_time_scope(params)
-    if stamped is not None:
-        return stamped
-    return _query_has_explicit_time_scope(str((params or {}).get("__original_query") or ""))
-
-
-def _query_has_explicit_time_scope(query: str) -> bool:
-    """Detect whether the user explicitly constrained the requested time window."""
-    query_text = str(query or "").strip()
-    if not query_text:
-        return False
-    if _RECENCY_CUE_RE.search(query_text):
-        return True
-    if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
-        return True
-    if re.search(
-        r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
-        query_text,
-        flags=re.IGNORECASE,
-    ):
-        return True
-    return False
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -171,7 +133,7 @@ FRED_UNITS_TRANSFORMS: Dict[str, Tuple[str, str, Optional[str]]] = {
         "(Continuously Compounded Annual Rate of Change)",
         "Percent Change",
     ),
-    "log": ("Natural Log", "(Log)", None),
+    "log": ("Natural Log", "(Log)", "Level"),
 }
 
 
@@ -618,7 +580,7 @@ class FREDProvider(BaseProvider):
         ):
             return False
 
-        if _user_set_time_scope(params):
+        if _user_set_time_scope(params, str(params.get("__original_query") or "")):
             return False
 
         requested_start = _parse_iso_date(params.get("startDate"))
@@ -758,7 +720,7 @@ class FREDProvider(BaseProvider):
                 params.get("__exact_indicator_title_match")
                 or params.get("__exact_provider_code_match")
             )
-            and not _user_set_time_scope(params)
+            and not _user_set_time_scope(params, str(params.get("__original_query") or ""))
             and not observations
             and (obs_params.get("observation_start") or obs_params.get("observation_end"))
         ):
@@ -794,6 +756,10 @@ class FREDProvider(BaseProvider):
             api_url_params["observation_start"] = effective_params["startDate"]
         if effective_params.get("endDate"):
             api_url_params["observation_end"] = effective_params["endDate"]
+        if transformation:
+            # Same transformation the observations call used, so the public
+            # URL reproduces the served values.
+            api_url_params["units"] = transformation
 
         query_string = "&".join(f"{key}={value}" for key, value in api_url_params.items())
         api_url = f"{self.base_url}/series/observations?{query_string}&api_key=***"
@@ -887,7 +853,7 @@ class FREDProvider(BaseProvider):
 
         metadata = Metadata(
             source="FRED",
-            indicator=info["title"],
+            indicator=indicator_title,
             country=inferred_country,
             frequency=self._map_frequency(info["frequency"]),
             unit=unit,

@@ -40,10 +40,7 @@ nano .env  # or use your preferred editor
 # Activate virtual environment
 source backend/.venv/bin/activate
 
-# Start development servers (recommended)
-python3 scripts/restart_dev.py
-
-# Alternative:
+# Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 ```
 
@@ -66,10 +63,7 @@ notepad .env
 # Activate virtual environment
 backend\.venv\Scripts\Activate.ps1
 
-# Start development servers (recommended)
-python3 scripts/restart_dev.py
-
-# Alternative:
+# Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 ```
 
@@ -89,12 +83,11 @@ notepad .env
 REM Activate virtual environment
 backend\.venv\Scripts\activate.bat
 
-REM Start development servers (recommended)
-python3 scripts/restart_dev.py
-
-REM Alternative:
+REM Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 ```
+
+`npm run dev` starts the backend on http://localhost:3001 and the Vite frontend on http://localhost:5173. Run it from the repository root with the virtual environment activated, because it calls `uvicorn` from your PATH. To restart, press Ctrl+C and run it again.
 
 ## Platform-Specific Instructions
 
@@ -136,10 +129,7 @@ sudo dnf install git
 # Activate virtual environment
 source backend/.venv/bin/activate
 
-# Start both servers (recommended)
-python3 scripts/restart_dev.py
-
-# Alternative — start both with npm:
+# Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 
 # Or start individually:
@@ -216,10 +206,7 @@ Same as Ubuntu/Linux (see above).
 # Activate virtual environment
 backend\.venv\Scripts\Activate.ps1
 
-# Start both servers (recommended)
-python3 scripts/restart_dev.py
-
-# Alternative — start both with npm:
+# Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 
 # Or start individually in separate terminals
@@ -235,10 +222,7 @@ deactivate
 REM Activate virtual environment
 backend\.venv\Scripts\activate.bat
 
-REM Start both servers (recommended)
-python3 scripts/restart_dev.py
-
-REM Alternative:
+REM Start both servers (backend http://localhost:3001, frontend http://localhost:5173)
 npm run dev
 
 REM Deactivate when done
@@ -320,10 +304,7 @@ copy .env.example .env  # Windows
 ### 6. Start Development Servers
 
 ```bash
-# Recommended
-python3 scripts/restart_dev.py
-
-# Alternative
+# From the repo root, with the virtual environment activated
 npm run dev
 ```
 

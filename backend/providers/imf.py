@@ -427,8 +427,14 @@ class IMFProvider(BaseProvider):
         """
         indicator = params.get("indicator", "GDP")
         country = params.get("country") or params.get("region", "US")
-        start_year = params.get("start_year") or params.get("startDate", "").split("-")[0] if params.get("startDate") else None
-        end_year = params.get("end_year") or params.get("endDate", "").split("-")[0] if params.get("endDate") else None
+        # Parenthesised: `a or b if c else None` parses as `(a or b) if c else
+        # None`, which dropped start_year/end_year whenever no ISO date was set.
+        start_year = params.get("start_year") or (
+            str(params["startDate"]).split("-")[0] if params.get("startDate") else None
+        )
+        end_year = params.get("end_year") or (
+            str(params["endDate"]).split("-")[0] if params.get("endDate") else None
+        )
 
         return await self.fetch_indicator(
             indicator=indicator,

@@ -16,6 +16,18 @@ from ..models import AuthResponse, AuthUser, LoginRequest, RegisterRequest, User
 logger = logging.getLogger(__name__)
 
 
+def allow_test_user_setting() -> Optional[bool]:
+    """ALLOW_TEST_USER parsed strictly: None when unset, else True only for "true".
+
+    "false", "0", "" and any other value mean False, so a flag set to disable
+    the test user can never enable anything.
+    """
+    raw = os.getenv("ALLOW_TEST_USER")
+    if raw is None:
+        return None
+    return raw.strip().lower() == "true"
+
+
 class MockUser:
     """In-memory user storage for mock auth."""
 
@@ -42,10 +54,8 @@ class MockAuthService:
         self.tokens: dict[str, str] = {}  # token -> user_id mapping
         # SECURITY: In development/test, create a default test user unless explicitly disabled.
         # In non-dev environments, require explicit ALLOW_TEST_USER=true.
-        allow_test_user_env = os.getenv("ALLOW_TEST_USER")
-        if allow_test_user_env is not None:
-            allow_test_user = allow_test_user_env.strip().lower() == "true"
-        else:
+        allow_test_user = allow_test_user_setting()
+        if allow_test_user is None:
             allow_test_user = bool(self.settings.dev_mode)
 
         if allow_test_user:

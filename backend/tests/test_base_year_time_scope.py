@@ -34,7 +34,21 @@ def test_base_year_is_not_a_time_scope(query):
         "US GDP since 2019",
         "GDP in constant 2015 dollars from 2010 to 2020",  # base year + real range
         "latest US GDP",
+        # Forms FRED's former private detector missed (it needed a year AND a
+        # word like since/from); FRED now uses this shared detector.
+        "GDP 2020-2024",
+        "UNRATE in 2008",
+        "US GDP for 2019",
+        "GDP 2015 to 2019",
     ],
 )
 def test_real_time_scope_still_detected(query):
     assert scope(query) is True
+
+
+def test_fred_uses_the_shared_detector():
+    from backend.providers import fred
+    from backend.services import time_range_defaults
+
+    assert fred._user_set_time_scope is time_range_defaults._user_set_time_scope
+    assert not hasattr(fred, "_query_has_explicit_time_scope")

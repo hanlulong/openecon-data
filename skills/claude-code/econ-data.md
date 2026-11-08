@@ -1,6 +1,6 @@
 # /econ-data — Verified economic data from official sources
 
-Query 330K+ economic indicators from 10 official sources: FRED, World Bank, IMF, Eurostat, BIS, UN Comtrade, Statistics Canada, OECD, ExchangeRate-API, and CoinGecko.
+Query 330K+ economic indicators from 11 official sources: FRED, World Bank, IMF, Eurostat, BIS, UN Comtrade, Statistics Canada, OECD, ExchangeRate-API, CoinGecko, and ChinaMacro.
 
 **No hallucinated numbers** — every result comes from official statistical agencies with source attribution.
 
@@ -26,12 +26,13 @@ When this command is invoked with `$ARGUMENTS`:
 
 1. **Try MCP first:** Call the `openecon-data` MCP server's `query_data` tool with the user's query as the `query` parameter.
 
-2. **HTTP fallback:** If the MCP server is not connected, make this request instead:
+2. **HTTP fallback:** If the MCP server is not connected, make this request instead. It builds the JSON body with Python so quotes and apostrophes in the query are escaped correctly (the closing `OPENECON_QUERY` must start at the beginning of its line):
    ```bash
-   curl -s -X POST https://data.openecon.ai/api/query \
-     -H "Content-Type: application/json" \
-     -d '{"query": "$ARGUMENTS"}'
+   python3 -c 'import json,sys; print(json.dumps({"query": sys.stdin.read().strip()}))' <<'OPENECON_QUERY' | curl -s -X POST https://data.openecon.ai/api/query -H "Content-Type: application/json" --data-binary @-
+   $ARGUMENTS
+   OPENECON_QUERY
    ```
+   Without `python3`, JSON-escape the query yourself (at least `"` and `\`) before putting it in `-d '{"query": "..."}'`.
 
 3. **Parse the response:**
    - `data` field contains the time series (array of `{date, value}` points)

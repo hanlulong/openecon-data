@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Give your AI agent accurate economic data.</strong><br/>
-  330K indicators from FRED, World Bank, IMF, Eurostat, and 6 more sources — one MCP command away.
+  330K indicators from FRED, World Bank, IMF, Eurostat, and 7 more sources — one MCP command away.
 </p>
 
 <p align="center">
@@ -91,11 +91,11 @@ AI agents hallucinate economic data. When you ask an LLM "What is US GDP?", you 
 | Feature | OpenEcon | fredapi | pandas-datareader | fred-mcp-server |
 |---------|----------|---------|-------------------|-----------------|
 | Natural language queries | Yes | No | No | No |
-| Data sources | 10+ | 1 (FRED) | 5 | 1 (FRED) |
+| Data sources | 10+ | 1 (FRED) | 7 | 1 (FRED) |
 | MCP server for AI agents | Yes | No | No | Yes |
 | Web UI with charts | Yes | No | No | No |
 | Conversational follow-ups | Yes | No | No | No |
-| Smart indicator discovery | 330K indexed | Manual codes | Manual codes | Manual codes |
+| Smart indicator discovery | 330K indexed | Keyword search | Keyword search | Keyword search |
 | Self-hostable | Yes | N/A | N/A | Yes |
 | No code required | Yes | No | No | No |
 
@@ -144,12 +144,15 @@ OPENROUTER_API_KEY=sk-or-...                  # required (LLM parsing) — https
 JWT_SECRET=...                                # required — generate with: openssl rand -hex 32
 ```
 
-Start both servers:
+Start both servers from the repo root, with the backend virtual environment activated (`npm run dev` runs `uvicorn` from your PATH):
 
 ```bash
-python3 scripts/restart_dev.py
+source backend/.venv/bin/activate
+npm run dev
 # Backend: http://localhost:3001  |  Frontend: http://localhost:5173
 ```
+
+To restart, press Ctrl+C and run `npm run dev` again.
 
 Then ask your first question — plain English in, sourced data out:
 
@@ -168,7 +171,7 @@ curl -X POST http://localhost:3001/api/query \
       "unit": "Percent",
       "sourceUrl": "https://fred.stlouisfed.org/series/UNRATE"  // every result links to its source
     },
-    "data": [{ "date": "2023-01", "value": 3.4 }, /* ... */]
+    "data": [{ "date": "2023-01-01", "value": 3.4 }, /* ... */]
   }]
 }
 ```
@@ -183,7 +186,7 @@ source backend/.venv/bin/activate            # Windows: backend\.venv\Scripts\ac
 pip install --upgrade pip
 pip install -r backend/requirements.txt
 cp .env.example .env                         # then set OPENROUTER_API_KEY and JWT_SECRET
-python3 scripts/restart_dev.py
+npm run dev                                  # backend :3001, frontend :5173
 ```
 </details>
 
@@ -294,7 +297,9 @@ See the [API Reference](docs/reference/api.md) for the full endpoint list and re
 | **OECD** | OECD member country statistics | Extensive | None |
 | **ExchangeRate-API** | 160+ currency pairs, live and historical | Live & historical | Free |
 | **CoinGecko** | Cryptocurrency prices and market data | 10,000+ coins | Free |
-| **ChinaMacro** | Fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield) | 14 curated series | None |
+| **ChinaMacro** | Fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield) | 23 curated series | None |
+
+This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis. See the [FRED® API Terms of Use](https://fred.stlouisfed.org/docs/api/terms_of_use.html).
 
 ## Who Is This For?
 
@@ -336,3 +341,5 @@ If you find this useful, a star helps others discover the project.
 ## License
 
 [AGPL-3.0](LICENSE) — Free to use, modify, and self-host. If you run a modified version as a service, you must share your changes. For commercial licensing, [contact us](mailto:security@openecon.ai).
+
+The copyright line, the "or (at your option) any later version" grant and the note that commits before the license change were released under MIT are in [NOTICE](NOTICE).

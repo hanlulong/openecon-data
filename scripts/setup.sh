@@ -1,8 +1,8 @@
 #!/bin/bash
-# econ-data-mcp Setup Script for Unix/Linux/macOS
+# openecon-data Setup Script for Unix/Linux/macOS
 set -e
 
-echo "🚀 econ-data-mcp Setup for Unix/Linux/macOS"
+echo "🚀 openecon-data Setup for Unix/Linux/macOS"
 echo "========================================"
 
 # Check for required tools
@@ -30,9 +30,9 @@ if ! command -v npm &> /dev/null; then
 fi
 echo "✅ npm $(npm -v)"
 
-# Check Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed. Please install Python >= 3.8"
+# Check Python (the backend uses `X | None` syntax and needs Python >= 3.10)
+if ! command -v python3 &> /dev/null || ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2> /dev/null; then
+    echo "❌ Python >= 3.10 is required (python3 is missing or older)"
     echo "   Download from: https://www.python.org/downloads/"
     exit 1
 fi

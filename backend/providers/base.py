@@ -25,6 +25,7 @@ from ..services.rate_limiter import (
     record_provider_rate_limit_error,
     record_provider_success,
 )
+from ..utils.redaction import redact_secrets
 from ..utils.retry import (
     DataNotAvailableError,
     ProviderCoolingDown,
@@ -188,6 +189,10 @@ class BaseProvider(ABC):
     MAX_RETRIES = 3
     RETRY_BACKOFF_FACTOR = 1.0
 
+    # Attributes holding credentials. Their values are masked in every error
+    # message the retry helpers build (httpx error text carries the full URL).
+    SECRET_ATTRIBUTES: tuple[str, ...] = ("api_key",)
+
     def __init__(self, timeout: float = DEFAULT_TIMEOUT):
         """Initialize base provider.
 
@@ -218,6 +223,12 @@ class BaseProvider(ABC):
             Normalized data or list of normalized data
         """
         pass
+
+    def _redact(self, text: str) -> str:
+        """Mask this provider's configured credentials and any credential-named
+        query parameter in ``text``."""
+        secrets = [getattr(self, name, None) for name in self.SECRET_ATTRIBUTES]
+        return redact_secrets(text, secrets)
 
     async def _get_with_retry(
         self,
@@ -395,22 +406,33 @@ class BaseProvider(ABC):
                 f"{self.provider_name} circuit breaker OPEN — provider is down, skipping (resets in 60s)"
             )
         except httpx.HTTPStatusError as exc:
+            # str(exc) embeds the full request URL, credentials included, so the
+            # message is rebuilt from its parts and every part is redacted.
             status = exc.response.status_code
+            try:
+                url = self._redact(str(exc.request.url))
+            except RuntimeError:  # an HTTPStatusError built without a request
+                url = "the provider URL"
+            message = f"{self.provider_name} API returned {status} for {url}"
             if status in (404, 403):
-                raise DataNotAvailableError(f"API returned {status}: {exc.response.text[:200]}") from exc
-            raise DataNotAvailableError(str(exc)) from exc
+                message += f": {self._redact(exc.response.text[:200])}"
+            raise DataNotAvailableError(message) from exc
         except _TransientHTTPError as exc:
             detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
-            raise ProviderUnavailable(f"Failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+            raise ProviderUnavailable(
+                f"Failed after {attempts} HTTP attempts{detail}: {self._redact(str(exc))}"
+            ) from exc
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
-            raise ProviderUnavailable(f"Connection failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+            raise ProviderUnavailable(
+                f"Connection failed after {attempts} HTTP attempts{detail}: {self._redact(str(exc))}"
+            ) from exc
         except httpx.TransportError as exc:
             # Read/write/protocol errors (server dropped the connection, ...):
             # not retried by tenacity, but equally no answer from the provider.
-            raise ProviderUnavailable(f"Request failed: {exc}") from exc
+            raise ProviderUnavailable(f"Request failed: {self._redact(str(exc))}") from exc
         except Exception as exc:
-            raise DataNotAvailableError(f"Request failed: {exc}") from exc
+            raise DataNotAvailableError(f"Request failed: {self._redact(str(exc))}") from exc
 
     @staticmethod
     def _normalize_country_code(country: str, mappings: Dict[str, str]) -> str:

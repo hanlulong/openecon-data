@@ -6,6 +6,13 @@ This directory contains utility scripts for development and deployment.
 
 **Purpose**: Clean up and restart development servers (backend and/or frontend)
 
+> **This is the maintainer's POSIX-only (Linux/macOS) script, not the general self-host path.** Before you run it, know that it:
+> - SIGKILLs every process whose command line matches `uvicorn` or `vite` (via `pgrep -f`), not only this project's, plus anything listening on ports 3001 and 5173;
+> - binds the backend to `0.0.0.0` (all interfaces), so it is reachable from your network;
+> - forces `ALLOW_TEST_USER=true`, which enables the test account with a published password.
+>
+> For a normal local setup, run `npm run dev` from the repo root with the backend virtual environment activated, and restart with Ctrl+C.
+
 ### Features
 - Automatically kills all existing processes on ports 3001 (backend) and 5173 (frontend)
 - Cleans up temporary log files
