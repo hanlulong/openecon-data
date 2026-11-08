@@ -494,6 +494,24 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         "en": "the closest available series",
         "zh": "最接近的可用序列",
     },
+    # CoinGecko dispatch disclosures (data_fetcher.fetch_from_coingecko).
+    # The history endpoints expose only price / market cap / volume, so a
+    # historical price-change request is served as the price history.
+    "coingecko_history_measure_substituted": {
+        "en": (
+            "CoinGecko publishes no historical price-change series; "
+            "showing the price history for the requested window instead."
+        ),
+        "zh": "CoinGecko 不提供历史价格涨跌幅序列；此处改为显示所请求时间段内的价格走势。",
+    },
+    # The ranking endpoint's page cap ({per_page}) is below the requested N.
+    "coingecko_ranking_truncated": {
+        "en": (
+            "CoinGecko returns at most {per_page} entries per ranking; "
+            "the requested top {requested} was truncated."
+        ),
+        "zh": "CoinGecko 每个排行榜最多返回 {per_page} 条；所请求的前 {requested} 名已被截断为前 {per_page} 名。",
+    },
     # Stateless-caller response contract (indicator_clarification.
     # finalize_clarification_response_contract). Appended to the menu's
     # existing reply hint, so the web UI hides them with it; {queries} are
@@ -564,6 +582,16 @@ def _normalize_language(language: Optional[str]) -> str:
     # "zh-cn" / "zh_hans" / "en-us" -> primary subtag
     lang = lang.replace("_", "-").split("-", 1)[0]
     return lang or _DEFAULT_LANG
+
+
+def catalog_language(language: Optional[str] = None) -> str:
+    """The catalog language ``language`` renders in (the normalized tag when
+    any catalog entry has it, else English). Structural: lets a cache key on
+    the language a payload's rendered notes are in, never on the raw tag."""
+    lang = _normalize_language(language)
+    if lang == _DEFAULT_LANG or any(lang in entry for entry in _MESSAGES.values()):
+        return lang
+    return _DEFAULT_LANG
 
 
 def get_message(message_id: str, language: Optional[str] = None, **kwargs) -> str:

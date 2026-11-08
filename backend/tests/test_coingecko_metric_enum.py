@@ -170,3 +170,55 @@ def test_exact_user_phrasing_prices_time_series_not_market_caps_serves_prices() 
     run(fetch_from_coingecko(provider, _intent(query, ["price"], params), params))
     assert [c["metric"] for c in provider.range_calls + provider.history_calls] == ["price"]
     assert provider.history_calls[0]["days"] == 90
+
+
+# ---------------------------------------------------------------------------
+# CoinGecko disclosures are localized, and the cache keys on their language
+# ---------------------------------------------------------------------------
+
+def _zh(intent: ParsedIntent) -> ParsedIntent:
+    intent.language = "zh"
+    return intent
+
+
+def test_historical_price_change_disclosure_is_localized() -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {
+        "coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": "price_change",
+        "startDate": "2026-01-01", "endDate": "2026-03-31",
+    }
+    intent = _zh(_intent("比特币过去三个月的价格变化", ["bitcoin"], params))
+    result = run(fetch_from_coingecko(provider, intent, params))
+    notes = result[0].metadata.notes or []
+    assert any("不提供历史价格涨跌幅" in note for note in notes)
+    assert not any("CoinGecko publishes" in note for note in notes)
+
+
+@pytest.mark.parametrize("language,marker", [(None, "entries per ranking"), ("zh", "每个排行榜最多返回 250 条")])
+def test_ranking_page_cap_disclosure_is_localized(language, marker) -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {"vsCurrency": "usd", "metric": "market_cap"}
+    intent = _intent("top 300 coins by market cap", ["cryptocurrency ranking"], params)
+    intent.language = language
+    result = run(fetch_from_coingecko(provider, intent, params))
+    assert provider.market_calls[0]["per_page"] == 250
+    notes = result[0].metadata.notes or []
+    assert sum(marker in note for note in notes) == 1
+    assert any("300" in note for note in notes)
+
+
+def test_cache_contract_keys_on_the_notes_rendering_language() -> None:
+    base = {"coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": "price_change", "days": 30}
+    en = _provider_request_contract("COINGECKO", _intent("q", ["bitcoin"], base), dict(base))
+    zh = _provider_request_contract("COINGECKO", _zh(_intent("q", ["bitcoin"], base)), dict(base))
+    zh_cn = _intent("q", ["bitcoin"], base)
+    zh_cn.language = "zh-CN"
+    zh_cn = _provider_request_contract("COINGECKO", zh_cn, dict(base))
+    # An uncatalogued language renders English notes, so it shares the key.
+    other = _intent("q", ["bitcoin"], base)
+    other.language = "xx"
+    other = _provider_request_contract("COINGECKO", other, dict(base))
+    assert "notes_language" not in en, "English keys stay byte-identical"
+    assert zh["notes_language"] == "zh" and zh != en
+    assert zh_cn == zh
+    assert other == en

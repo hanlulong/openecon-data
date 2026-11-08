@@ -39,6 +39,7 @@ from ..services.provider_strategy import (
     normalize_aggregate_geography,
     region_qualified_indicator_text,
 )
+from ..services.user_messages import catalog_language as _catalog_language
 from ..services.user_messages import get_message as _localized_message
 from ..services.time_scope_provenance import stamped_user_time_scope as _stamped_user_time_scope
 from ..services.follow_up_retrieval import (
@@ -843,6 +844,14 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["days"] = params.get("days")
         contract["start_date"] = params.get("startDate")
         contract["end_date"] = params.get("endDate")
+        # fetch_from_coingecko renders its user-facing notes (history-measure
+        # substitution, ranking page cap) in the request's language, and they
+        # are part of the cached payload: the rendering language is identity,
+        # so a zh-annotated payload is never served to an en request. Absent
+        # for English (the default), keeping existing English keys unchanged.
+        notes_language = _catalog_language(getattr(intent, "language", None))
+        if notes_language != "en":
+            contract["notes_language"] = notes_language
 
     # Frequency (and FRED's aggregation method) are part of the request
     # IDENTITY, not just the payload: two requests that differ ONLY in frequency
@@ -2096,14 +2105,18 @@ async def fetch_from_coingecko(
                 series_list.extend(data)
         if hist_metric != provider_metric:
             # CoinGecko has no historical change series: disclose the
-            # price substitution instead of silently ignoring the request.
+            # price substitution instead of silently ignoring the request
+            # (localized; the contract keys on the rendering language).
+            note = _localized_message(
+                "coingecko_history_measure_substituted", getattr(intent, "language", None),
+            ) or (
+                "CoinGecko publishes no historical price-change series; "
+                "showing the price history for the requested window instead."
+            )
             for series in series_list or []:
                 meta = getattr(series, "metadata", None)
-                if meta is not None:
-                    meta.notes = (meta.notes or []) + [
-                        "CoinGecko publishes no historical price-change series; "
-                        "showing the price history for the requested window instead."
-                    ]
+                if meta is not None and note not in (meta.notes or []):
+                    meta.notes = (meta.notes or []) + [note]
         return series_list
 
     # Current data. The ranking TRIGGER is the pre-existing cue check (kept
@@ -2124,13 +2137,16 @@ async def fetch_from_coingecko(
         if requested_n > per_page:
             # Disclose the API's page cap instead of silently serving fewer
             # entries than requested ("top 300" returned 250 with no note).
+            note = _localized_message(
+                "coingecko_ranking_truncated", getattr(intent, "language", None),
+                per_page=per_page, requested=requested_n,
+            ) or (
+                f"CoinGecko returns at most {per_page} entries per "
+                f"ranking; the requested top {requested_n} was truncated."
+            )
             for series in result or []:
                 meta = getattr(series, "metadata", None)
-                if meta is not None:
-                    note = (
-                        f"CoinGecko returns at most {per_page} entries per "
-                        f"ranking; the requested top {requested_n} was truncated."
-                    )
+                if meta is not None and note not in (meta.notes or []):
                     meta.notes = (meta.notes or []) + [note]
         return result
 
