@@ -655,34 +655,42 @@ def finalize_clarification_response_contract(qs: Any, response: QueryResponse) -
             if reply_idx is not None and insert_at <= reply_idx:
                 reply_idx += 1
 
-        if not any(_STATELESS_REPLY_MARKER in line.lower() for line in questions):
-            parts: List[str] = []
-            conversation_id = str(response.conversationId or "").strip()
-            if conversation_id:
-                parts.append(_chrome(
-                    "clarify_stateless_resend",
-                    language,
-                    "If your client does not keep this conversation, resend the number "
-                    'with conversationId="{conversation_id}".',
-                    conversation_id=conversation_id,
-                ))
-            requeries = [f"{option.id}) {option.query}" for option in options if option.query]
-            if requeries:
-                parts.append(_chrome(
-                    "clarify_stateless_requeries",
-                    language,
-                    "Or send one of these self-contained queries instead: {queries}.",
-                    queries="; ".join(requeries),
-                ))
-            if parts:
-                stateless_text = " ".join(parts)
-                if reply_idx is not None:
-                    questions[reply_idx] = f"{questions[reply_idx].rstrip()} {stateless_text}"
-                else:
-                    # Same line shape the browser UI already hides, so the
-                    # stateless instructions never show up there as noise.
-                    hint = _chrome("clarify_stateless_reply_hint", language, "Reply with the option number.")
-                    questions.append(f"{hint} {stateless_text}")
+        # Idempotent without depending on conversationId: a line carrying the
+        # conversationid= marker means the stateless text is already there;
+        # otherwise each part is added only if absent — the re-ask part is
+        # found by its own rendered text (option.query is only ever filled
+        # when None, so a re-finalize renders it identically). A menu with no
+        # conversationId therefore never grows a second re-ask block.
+        already_finalized = any(_STATELESS_REPLY_MARKER in line.lower() for line in questions)
+        parts: List[str] = []
+        conversation_id = str(response.conversationId or "").strip()
+        if conversation_id and not already_finalized:
+            parts.append(_chrome(
+                "clarify_stateless_resend",
+                language,
+                "If your client does not keep this conversation, resend the number "
+                'with conversationId="{conversation_id}".',
+                conversation_id=conversation_id,
+            ))
+        requeries = [f"{option.id}) {option.query}" for option in options if option.query]
+        if requeries and not already_finalized:
+            requeries_text = _chrome(
+                "clarify_stateless_requeries",
+                language,
+                "Or send one of these self-contained queries instead: {queries}.",
+                queries="; ".join(requeries),
+            )
+            if not any(requeries_text in line for line in questions):
+                parts.append(requeries_text)
+        if parts:
+            stateless_text = " ".join(parts)
+            if reply_idx is not None:
+                questions[reply_idx] = f"{questions[reply_idx].rstrip()} {stateless_text}"
+            else:
+                # Same line shape the browser UI already hides, so the
+                # stateless instructions never show up there as noise.
+                hint = _chrome("clarify_stateless_reply_hint", language, "Reply with the option number.")
+                questions.append(f"{hint} {stateless_text}")
         response.clarificationQuestions = questions
     except Exception as exc:  # never let the contract break a clarification
         logger.warning(

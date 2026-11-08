@@ -199,6 +199,50 @@ def test_contract_renders_requeries_in_browser_hidden_reply_line_and_message(ser
     assert again.clarificationQuestions == response.clarificationQuestions
 
 
+def _requery_menu(conversation_id: str, language=None, with_hint=True):
+    intent = _intent("FRED", {"country": "US"}, query="US money supply")
+    if language:
+        intent.language = language
+    options = [_option("FRED", "M2SL", 1), _option("BIS", "BIS_WS_TC", 2)]
+    hint = _MESSAGES["clarify_reply_hint"][language or "en"]
+    questions = ["Choose:", "1. [FRED] x (M2SL)", "2. [BIS] x (BIS_WS_TC)"] + ([hint] if with_hint else [])
+    response = _menu_response(options, questions, intent)
+    response.conversationId = conversation_id
+    return response
+
+
+def _requery_marker(language=None) -> str:
+    template = _MESSAGES["clarify_stateless_requeries"][language or "en"]
+    return template.split("{queries}", 1)[0]
+
+
+@pytest.mark.parametrize("language", [None, "zh"])
+@pytest.mark.parametrize("with_hint", [True, False])
+@pytest.mark.parametrize("conversation_id", ["", "conv-9"])
+def test_contract_is_idempotent_with_or_without_a_conversation_id(service, language, with_hint, conversation_id):
+    response = clarification.finalize_clarification_response_contract(
+        service, _requery_menu(conversation_id, language, with_hint),
+    )
+    first = list(response.clarificationQuestions)
+    for _ in range(2):
+        response = clarification.finalize_clarification_response_contract(service, response)
+    assert response.clarificationQuestions == first
+    joined = "\n".join(first)
+    assert joined.count(_requery_marker(language)) == 1
+    assert joined.lower().count("conversationid=") == (1 if conversation_id else 0)
+    assert sum(1 for line in first if reply_hint_language(line)) == 1
+
+
+def test_contract_adds_only_the_missing_resend_part_once_a_conversation_id_appears(service):
+    response = clarification.finalize_clarification_response_contract(service, _requery_menu(""))
+    response.conversationId = "conv-late"
+    response = clarification.finalize_clarification_response_contract(service, response)
+    response = clarification.finalize_clarification_response_contract(service, response)
+    joined = "\n".join(response.clarificationQuestions)
+    assert joined.count(_requery_marker()) == 1
+    assert joined.count('conversationId="conv-late"') == 1
+
+
 def test_contract_adds_hidden_reply_line_when_builder_had_none(service):
     intent = _intent("FRED", {"country": "US"})
     options = [_option("FRED", "M2SL", 1), _option("FRED", "M1SL", 2)]
