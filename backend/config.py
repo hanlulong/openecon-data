@@ -252,6 +252,18 @@ class Settings(BaseSettings):
         alias="QUERY_TIMEOUT_SECONDS",
         description="Server-side deadline for non-streaming query endpoints. Beyond this, the request returns 504 with error='request_timeout'."
     )
+    # Request-deadline reserves carried to the provider layer
+    # (backend/utils/request_budget.py). Both can only SHORTEN provider work.
+    query_answer_reserve_seconds: float = Field(
+        default=10.0,
+        alias="QUERY_ANSWER_RESERVE_SECONDS",
+        description="No new provider request starts in the final N seconds of a query deadline; only shortens provider work."
+    )
+    provider_retry_reserve_seconds: float = Field(
+        default=40.0,
+        alias="PROVIDER_RETRY_RESERVE_SECONDS",
+        description="A provider retry starts, and its timeout is capped, so that it leaves this many seconds of the deadline for cross-provider fallback and the answer; never adds retries or raises a timeout."
+    )
     pro_query_timeout_seconds: int = Field(
         default=180,
         alias="PRO_QUERY_TIMEOUT_SECONDS",

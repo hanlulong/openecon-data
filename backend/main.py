@@ -67,6 +67,7 @@ from .services.grok import CodeGenerationError
 from .services.query import QueryService
 from .services.user_store import user_store
 from .utils.dependencies import require_promode
+from .utils.request_budget import end_request_budget, request_budget, start_request_budget
 from .utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -1635,16 +1636,24 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
         # one-shot anonymous queries with no conversationId). The query
         # deadline runs INSIDE the lock so a stuck turn can't hold it forever.
         async with _conversation_turn_lock(conversation_id):
-            result = await asyncio.wait_for(
-                query_service.process_query(
-                    request.query,
-                    conversation_id,
-                    auto_pro_mode=auto_pro,
-                    owner_key=owner_key,
-                    claimable_owner_keys=claimable_keys,
-                ),
-                timeout=float(settings.query_timeout_seconds),
-            )
+            # The provider layer sees the same deadline as the hard cancel
+            # below, started from one number at one point, so retries stop
+            # (and the request answers honestly) before the 504 backstop.
+            with request_budget(
+                float(settings.query_timeout_seconds),
+                answer_reserve_seconds=settings.query_answer_reserve_seconds,
+                retry_reserve_seconds=settings.provider_retry_reserve_seconds,
+            ):
+                result = await asyncio.wait_for(
+                    query_service.process_query(
+                        request.query,
+                        conversation_id,
+                        auto_pro_mode=auto_pro,
+                        owner_key=owner_key,
+                        claimable_owner_keys=claimable_keys,
+                    ),
+                    timeout=float(settings.query_timeout_seconds),
+                )
     except asyncio.TimeoutError:
         timeout_conversation_id = conversation_id or str(uuid.uuid4())
         timeout_ms = _elapsed_ms(query_start)
@@ -1908,6 +1917,8 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
         tracker_token = None
         tracker = None
         query_task = None
+        _budget = None
+        _budget_token = None
         client_disconnected = False
         _conv_lock = _get_conversation_lock(conversation_id) if conversation_id else None
         _lock_held = False
@@ -1962,6 +1973,13 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             # generated code); anonymous queries get standard processing.
             auto_pro = settings.promode_enabled and user is not None
             owner_key, claimable_keys = get_conversation_owner(request, user)
+            # The query task copies this context, so the provider layer sees
+            # the stream deadline (closed in the finally below).
+            _budget, _budget_token = start_request_budget(
+                float(_SSE_STREAM_TIMEOUT_SECONDS),
+                answer_reserve_seconds=settings.query_answer_reserve_seconds,
+                retry_reserve_seconds=settings.provider_retry_reserve_seconds,
+            )
             query_task = asyncio.create_task(
                 query_service.process_query(
                     request.query,
@@ -2126,6 +2144,10 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 except Exception as _cancel_exc:
                     logger.debug("Unexpected error while cancelling query task: %s", _cancel_exc)
                 logger.info("📡 Cleaned up pending query task")
+
+            if _budget is not None:
+                end_request_budget(_budget, _budget_token)
+                _budget = None
 
             # Release the per-conversation turn lock LAST, after the query task
             # has been fully cancelled/awaited above, so the lock covers the

@@ -26,10 +26,12 @@ from ..services.rate_limiter import (
     record_provider_success,
 )
 from ..utils.redaction import redact_secrets
+from ..utils.request_budget import budget_allows, retry_attempt_timeout, retry_fits
 from ..utils.retry import (
     DataNotAvailableError,
     ProviderCoolingDown,
     ProviderUnavailable,
+    RequestBudgetExhausted,
     parse_retry_after,
 )
 
@@ -167,6 +169,15 @@ class _RetryAdmissionRefused(Exception):
     """Stop retries without replacing the last genuine upstream outcome."""
 
 
+def _retry_stop_detail(retry_refused: bool, budget_limited: bool) -> str:
+    """Why the retry loop stopped, for the ProviderUnavailable message."""
+    if retry_refused:
+        return "; further retries blocked by local rate limit"
+    if budget_limited:
+        return "; retries limited by the request deadline"
+    return "; retries exhausted"
+
+
 class BaseProvider(ABC):
     """Base class for all data providers.
 
@@ -269,8 +280,9 @@ class BaseProvider(ABC):
         """
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
         return await self._request_with_retry(
-            lambda: client.get(url, **kwargs, timeout=req_timeout),
+            lambda t: client.get(url, **kwargs, timeout=t),
             raise_on_status,
+            attempt_timeout=req_timeout,
         )
 
     async def _post_with_retry(
@@ -304,14 +316,17 @@ class BaseProvider(ABC):
         """
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
         return await self._request_with_retry(
-            lambda: client.post(url, **kwargs, timeout=req_timeout),
+            lambda t: client.post(url, **kwargs, timeout=t),
             raise_on_status,
+            attempt_timeout=req_timeout,
         )
 
     async def _request_with_retry(
         self,
-        send: Callable[[], Awaitable[httpx.Response]],
+        send: Callable[[float], Awaitable[httpx.Response]],
         raise_on_status: bool,
+        *,
+        attempt_timeout: Optional[float] = None,
     ) -> httpx.Response:
         """Shared admission + retry + breaker core for _get/_post_with_retry.
 
@@ -320,14 +335,34 @@ class BaseProvider(ABC):
         I/O. A 429 is terminal and opens the shared cooldown. The whole retry
         operation contributes ONE outcome to the availability breaker, and a
         cancellation contributes none.
+
+        ``send(timeout)`` performs one HTTP attempt. Under an active request
+        budget (backend/utils/request_budget.py) a NEW operation inside the
+        answer reserve is refused with zero I/O (RequestBudgetExhausted, never
+        recorded in the breaker); a RETRY starts only when it fits before the
+        retry reserve and its timeout is capped to fit. The FIRST attempt's
+        timeout is never changed, and with no budget active the attempt
+        count, timeouts and backoff are exactly as before (deflation only).
         """
+        if attempt_timeout is None:
+            attempt_timeout = self.timeout
         provider_key = (self.provider_name or "").upper()
         attempts = 0
         last_failure = None
         retry_refused = False
+        budget_limited = False
+
+        def _deadline_stop(retry_state) -> bool:
+            # tenacity computes the upcoming sleep before consulting stop, so
+            # the sleep plus a useful attempt is checked against the deadline.
+            nonlocal budget_limited
+            if retry_fits(retry_state.upcoming_sleep):
+                return False
+            budget_limited = True
+            return True
 
         @retry(
-            stop=stop_after_attempt(self.MAX_RETRIES),
+            stop=stop_after_attempt(self.MAX_RETRIES) | _deadline_stop,
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
             retry=retry_if_exception_type((
                 httpx.ConnectError, httpx.TimeoutException, _TransientHTTPError,
@@ -336,7 +371,8 @@ class BaseProvider(ABC):
             reraise=True,
         )
         async def _attempt():
-            nonlocal attempts, last_failure, retry_refused
+            nonlocal attempts, last_failure, retry_refused, budget_limited
+            is_retry = attempts > 0
             if attempts and provider_key:
                 try:
                     await acquire_provider(provider_key)
@@ -344,8 +380,12 @@ class BaseProvider(ABC):
                     retry_refused = True
                     raise _RetryAdmissionRefused() from exc
             attempts += 1
+            # Only a RETRY's timeout may be capped by the request deadline.
+            timeout = retry_attempt_timeout(attempt_timeout) if is_retry else attempt_timeout
+            if timeout < attempt_timeout:
+                budget_limited = True
             try:
-                response = await send()
+                response = await send(timeout)
                 if response.status_code == 429:
                     cooling = record_rate_limited_response(provider_key, response)
                     try:
@@ -368,6 +408,12 @@ class BaseProvider(ABC):
 
         breaker = _get_breaker(self.provider_name)
         try:
+            # No request time left for provider I/O: refuse with zero I/O. Not
+            # replayed into the breaker -- the provider did not fail.
+            if not budget_allows(0.0):
+                raise RequestBudgetExhausted(
+                    f"{self.provider_name}: request deadline reached; request not sent"
+                )
             # Refuse an already-open availability breaker before reserving
             # quota, and again after the admission wait in case it opened then.
             if _breaker_refuses_now(breaker):
@@ -418,12 +464,12 @@ class BaseProvider(ABC):
                 message += f": {self._redact(exc.response.text[:200])}"
             raise DataNotAvailableError(message) from exc
         except _TransientHTTPError as exc:
-            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            detail = _retry_stop_detail(retry_refused, budget_limited)
             raise ProviderUnavailable(
                 f"Failed after {attempts} HTTP attempts{detail}: {self._redact(str(exc))}"
             ) from exc
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
+            detail = _retry_stop_detail(retry_refused, budget_limited)
             raise ProviderUnavailable(
                 f"Connection failed after {attempts} HTTP attempts{detail}: {self._redact(str(exc))}"
             ) from exc

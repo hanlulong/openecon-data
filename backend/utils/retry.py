@@ -11,6 +11,8 @@ from functools import wraps
 
 import httpx
 
+from .request_budget import MIN_RETRY_ATTEMPT_SECONDS, budget_allows
+
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,19 @@ def is_provider_unavailable(exc: BaseException | None) -> bool:
     verdict about the request; ProviderUnavailable and its subclasses are not.
     """
     return isinstance(exc, ProviderUnavailable)
+
+
+class RequestBudgetExhausted(ProviderUnavailable):
+    """We ran out of REQUEST time before the provider could be asked.
+
+    Raised (with zero I/O) when a new provider operation would start inside
+    the request deadline's answer reserve, or when a fetch-level budget was
+    bound by the request deadline rather than by the provider. It is a
+    no-verdict (a ProviderUnavailable, so every handler and fallback keeps
+    working), it is NEVER recorded in the availability breaker, and it is NOT
+    a claim that the provider is down. ``with_context`` is inherited and
+    keeps this class.
+    """
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:
@@ -180,6 +195,14 @@ async def retry_async(
             if attempt < max_attempts:
                 # Add jitter to avoid thundering herd problem
                 actual_delay = delay + random.uniform(0, jitter) if jitter > 0 else delay
+                if not budget_allows(actual_delay + MIN_RETRY_ATTEMPT_SECONDS):
+                    # The request deadline cannot fit the sleep plus a useful
+                    # attempt: surface this failure now (deflation only).
+                    logger.warning(
+                        "Attempt %d/%d failed: %s. Not retrying: the request "
+                        "deadline cannot fit another attempt", attempt, max_attempts, exc,
+                    )
+                    raise
                 logger.warning(
                     f"Attempt {attempt}/{max_attempts} failed: {exc}. "
                     f"Retrying in {actual_delay:.1f}s..."
