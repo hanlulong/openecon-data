@@ -34,7 +34,8 @@ one fixed prefix and add it there.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+import math
+from typing import Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -577,11 +578,14 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     },
     # Honest outage answers (query._build_provider_outage_response): the
     # provider gave NO verdict, so the answer never claims the data is missing.
-    # {provider} is the provider's display name; {seconds} a whole number.
+    # {provider} is one or more provider display names (joined by
+    # join_names), {Provider} the same text in sentence-initial form; the
+    # English wording is number-neutral so several providers read correctly.
+    # {wait} is a format_retry_wait phrase.
     "provider_unavailable": {
         "en": (
-            "⚠️ **{provider} is not responding right now**\n\n"
-            "{provider} did not answer this request (timeouts or server errors), "
+            "⚠️ **No response from {provider} right now**\n\n"
+            "{Provider} did not answer this request (timeouts or server errors), "
             "so no data could be retrieved. This does not mean the data does not "
             "exist. Please try again in a few minutes."
         ),
@@ -593,15 +597,29 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     },
     "provider_rate_limited": {
         "en": (
-            "⚠️ **{provider} is limiting requests right now**\n\n"
-            "{provider} asked us to slow down, so this request was not answered. "
-            "This does not mean the data does not exist. Please try again in about "
-            "{seconds} seconds."
+            "⚠️ **Requests to {provider} are being rate-limited right now**\n\n"
+            "{Provider} asked us to slow down, so this request was not answered. "
+            "This does not mean the data does not exist. Please try again in {wait}."
         ),
         "zh": (
             "⚠️ **{provider} 当前正在限流**\n\n"
             "{provider} 要求暂缓请求，因此本次请求未获响应。这并不代表该数据不存在，"
-            "请约 {seconds} 秒后重试。"
+            "请{wait}后重试。"
+        ),
+    },
+    # A cooldown / quota refusal with no stated wait (never "timeouts or
+    # server errors": the provider refused, it did not fail).
+    "provider_rate_limited_later": {
+        "en": (
+            "⚠️ **Requests to {provider} are being rate-limited right now**\n\n"
+            "{Provider} is refusing further requests for the moment (request quota "
+            "or rate limit), so this request was not answered. This does not mean "
+            "the data does not exist. Please try again in a few minutes."
+        ),
+        "zh": (
+            "⚠️ **{provider} 当前正在限流**\n\n"
+            "{provider} 暂时拒绝更多请求（请求配额或频率限制），因此本次请求未获响应。"
+            "这并不代表该数据不存在，请几分钟后重试。"
         ),
     },
     "request_deadline_exhausted": {
@@ -618,6 +636,32 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "不存在，请重试，或缩小查询范围（减少国家数量或缩短时间范围）。"
         ),
     },
+    # Expired cached copy served while the provider gives no verdict.
+    "stale_cache_served": {
+        "en": "⚠️ {Provider} is temporarily unavailable. Showing cached data (may not be the latest).",
+        "zh": "⚠️ {provider} 暂时无法访问，以下为缓存数据（可能不是最新）。",
+    },
+    # Cross-provider fallback served the data (query._try_with_fallback):
+    # neutral on why the primary could not serve it (outage or no data).
+    "fallback_provider_substituted": {
+        "en": "{Primary} could not serve this request, so this data comes from {serving} instead.",
+        "zh": "{primary} 未能提供本次请求的数据，以下数据改由 {serving} 提供。",
+    },
+    # Stand-in when no provider name is known.
+    "provider_generic_name": {
+        "en": "the data provider",
+        "zh": "数据源",
+    },
+    # format_retry_wait phrases (singular / plural ids; zh has no plural).
+    "retry_wait_second": {"en": "about 1 second", "zh": "约 1 秒"},
+    "retry_wait_seconds": {"en": "about {n} seconds", "zh": "约 {n} 秒"},
+    "retry_wait_minute": {"en": "about 1 minute", "zh": "约 1 分钟"},
+    "retry_wait_minutes": {"en": "about {n} minutes", "zh": "约 {n} 分钟"},
+    "retry_wait_hour": {"en": "about 1 hour", "zh": "约 1 小时"},
+    "retry_wait_hours": {"en": "about {n} hours", "zh": "约 {n} 小时"},
+    # join_names separators: "A, B and C" / "A、B、C".
+    "list_separator": {"en": ", ", "zh": "、"},
+    "list_final_separator": {"en": " and ", "zh": "、"},
 }
 
 # The fixed prefix every option reply hint starts with, per language (see the
@@ -708,3 +752,31 @@ def get_message(message_id: str, language: Optional[str] = None, **kwargs) -> st
         except (KeyError, IndexError, ValueError):
             # Give back the unsubstituted English template rather than crash.
             return english
+
+
+def format_retry_wait(seconds: float, language: Optional[str] = None) -> str:
+    """A localized "about N seconds/minutes/hours" phrase for a positive wait.
+
+    Whole units, rounded UP (never promise a retry sooner than stated):
+    under a minute in seconds, under an hour in minutes, else hours. The
+    caller caps absurd values before calling.
+    """
+    total = max(1, math.ceil(float(seconds)))
+    if total < 60:
+        count, unit = total, "second"
+    elif total < 3600:
+        count, unit = math.ceil(total / 60), "minute"
+    else:
+        count, unit = math.ceil(total / 3600), "hour"
+    message_id = f"retry_wait_{unit}" if count == 1 else f"retry_wait_{unit}s"
+    return get_message(message_id, language, n=count)
+
+
+def join_names(names: Iterable[str], language: Optional[str] = None) -> str:
+    """Join display names as a localized list ("A, B and C" / "A、B、C")."""
+    items = [str(name) for name in names if str(name or "").strip()]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    separator = get_message("list_separator", language)
+    final = get_message("list_final_separator", language)
+    return separator.join(items[:-1]) + final + items[-1]

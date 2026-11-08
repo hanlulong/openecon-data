@@ -282,6 +282,20 @@ def reset_selection_cache():
     yield
 
 
+@pytest.fixture(autouse=True)
+def offline_fallback_judge():
+    """Keep the cross-provider fallback judge offline: its real call goes to
+    the configured LLM (the repo .env points at the local vLLM), so by default
+    it answers "unavailable" (None) -- which keeps the keyword gate's decision,
+    i.e. the pre-judge behaviour. Tests of the judge patch
+    ``backend.services.query._smj_judge_fallback_result`` themselves, or call
+    ``semantic_match_judge.judge_fallback_result`` directly with a fake LLM."""
+    from unittest.mock import AsyncMock, patch as _patch
+
+    with _patch("backend.services.query._smj_judge_fallback_result", new=AsyncMock(return_value=None)):
+        yield
+
+
 # ============================================================================
 # Data Fixtures
 # ============================================================================

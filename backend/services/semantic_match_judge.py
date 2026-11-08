@@ -7,16 +7,32 @@ appears to represent the same economic concept as the user's request.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Type, TypeVar
 
 from pydantic import BaseModel, Field
 
 from ..models import NormalizedData
+from ..utils.request_budget import io_remaining
 from .candidate_evidence_builder import CandidateEvidence
 from .json_parser import JSONParseError, parse_json_response
 
 logger = logging.getLogger(__name__)
+
+# A semantic-match judgment authorizes a candidate only as a confident "match".
+# Shared by the resolved-indicator and the cross-provider fallback judges.
+MATCH_CONFIDENCE_THRESHOLD = 0.75
+# Fixed wall-clock cap for one fallback judgment (all of its LLM attempts).
+# Measured on production's local gpt-oss-120b at reasoning_effort=low: ~0.8-1.5s
+# per call (2026-11-08); the cap only bounds a slow or wedged model.
+FALLBACK_JUDGE_TIMEOUT_SECONDS = 8.0
+# Below this much time a judgment cannot plausibly complete: the judge counts
+# as unavailable instead of being started.
+MIN_JUDGE_SECONDS = 2.0
+
+_J = TypeVar("_J", bound=BaseModel)
 
 
 class SemanticMatchJudgment(BaseModel):
@@ -54,6 +70,10 @@ def _series_summary(series: NormalizedData) -> dict[str, str]:
         "provider": str(getattr(meta, "source", "") or ""),
         "series_id": str(getattr(meta, "seriesId", "") or ""),
         "indicator": str(getattr(meta, "indicator", "") or ""),
+        # Already validated structurally; shown so the judge does not call a
+        # matching series "uncertain" for not naming the requested country
+        # (observed live: IMF NGDPD for "Japan GDP" -> uncertain 0.6).
+        "country": str(getattr(meta, "country", "") or ""),
         "description": str(getattr(meta, "description", "") or ""),
         "unit": str(getattr(meta, "unit", "") or ""),
         "frequency": str(getattr(meta, "frequency", "") or ""),
@@ -131,6 +151,118 @@ def _execution_judge_user_prompt(
     )
 
 
+def judgment_accepts(judgment: Optional[SemanticMatchJudgment]) -> bool:
+    """True only for a confident "match" (the single acceptance rule)."""
+    return bool(
+        judgment is not None
+        and judgment.decision == "match"
+        and judgment.confidence >= MATCH_CONFIDENCE_THRESHOLD
+    )
+
+
+def bounded_judge_timeout(cap: Optional[float] = None) -> Optional[float]:
+    """Seconds one judgment may take: ``cap`` (default
+    FALLBACK_JUDGE_TIMEOUT_SECONDS), clamped by the request's remaining I/O
+    time (deadline minus the answer reserve). None when less than
+    MIN_JUDGE_SECONDS is left: the judge is then unavailable, not run."""
+    limit = FALLBACK_JUDGE_TIMEOUT_SECONDS if cap is None else float(cap)
+    remaining = io_remaining()
+    timeout = limit if remaining is None else min(limit, remaining)
+    return timeout if timeout >= MIN_JUDGE_SECONDS else None
+
+
+def _json_contract(response_model: Type[BaseModel]) -> str:
+    """Output contract for the manual (non-Instructor) path, which otherwise
+    gets no schema: observed live it answered {"result": "match"}."""
+    schema = json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+    return (
+        "\n\nRespond with ONLY a JSON object that matches this JSON schema "
+        f"(keep 'reason' to one short sentence): {schema}"
+    )
+
+
+async def _structured_judgment(
+    qs: Any,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: Type[_J],
+    answer_tokens: int,
+    label: str,
+    timeout_s: Optional[float] = None,
+) -> Optional[_J]:
+    """One structured judgment on the configured LLM, or None (unavailable).
+
+    Every judge goes through here, so each gets the parse path's reasoning-
+    model handling (openrouter.structured_completion_kwargs: reasoning_effort
+    =low plus reasoning headroom on vLLM) instead of a bare max_tokens that a
+    reasoning model spends on reasoning before the JSON (observed live:
+    finish_reason=length on every attempt). It never raises (cancellation
+    aside): an LLM failure, an open local-LLM circuit, a malformed answer or
+    ``timeout_s`` running out all return None, so the caller can fall back to
+    its non-LLM decision instead of cascading an LLM outage.
+    """
+    openrouter = getattr(qs, "openrouter", None)
+    if openrouter is None:
+        return None
+    from .openrouter import _local_circuit_is_open, structured_completion_kwargs
+
+    if _local_circuit_is_open():
+        logger.info("%s skipped: the local LLM circuit is open", label)
+        return None
+    completion = structured_completion_kwargs(getattr(openrouter, "settings", None), answer_tokens)
+
+    async def _run() -> Optional[_J]:
+        instructor_client = getattr(openrouter, "instructor_client", None)
+        instructor_model = getattr(openrouter, "instructor_model", None)
+        if instructor_client is not None and instructor_model is not None:
+            try:
+                judgment = await instructor_client.chat.completions.create(
+                    model=instructor_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_model=response_model,
+                    max_retries=2,
+                    temperature=0.0,
+                    **completion,
+                )
+                if isinstance(judgment, response_model):
+                    return judgment
+                logger.warning("%s (Instructor) returned %s, not a judgment", label, type(judgment).__name__)
+            except Exception as exc:
+                logger.warning("%s (Instructor) failed: %s", label, exc)
+
+        llm_provider = getattr(openrouter, "llm_provider", None)
+        if llm_provider is None:
+            return None
+        try:
+            result = await llm_provider.generate(
+                prompt=user_prompt,
+                system_prompt=system_prompt + _json_contract(response_model),
+                temperature=0.0,
+                max_tokens=completion["max_tokens"],
+                response_format={"type": "json_object"},
+            )
+            content = result["choices"][0]["message"]["content"]
+            parsed = parse_json_response(content, fix_truncated=True)
+            return response_model.model_validate(parsed)
+        except (KeyError, TypeError, JSONParseError, ValueError) as exc:
+            logger.warning("%s (manual JSON) failed: %s", label, exc)
+        except Exception as exc:
+            logger.warning("%s failed: %s", label, exc)
+        return None
+
+    if timeout_s is None:
+        return await _run()
+    try:
+        return await asyncio.wait_for(_run(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        logger.warning("%s timed out after %.1fs", label, timeout_s)
+        return None
+
+
 async def judge_fallback_result(
     qs: Any,
     *,
@@ -138,63 +270,29 @@ async def judge_fallback_result(
     fallback_result: List[NormalizedData],
     original_query: Optional[str],
     original_concept: Optional[str],
+    timeout_s: Optional[float] = None,
 ) -> Optional[SemanticMatchJudgment]:
-    """Ask the configured LLM whether fallback metadata matches the request."""
+    """Ask the configured LLM whether fallback metadata matches the request.
+
+    None means the judge is unavailable (no LLM, failure, timeout); a caller
+    must not read it as a verdict either way.
+    """
     if not fallback_result or not original_indicators:
         return None
-
-    openrouter = getattr(qs, "openrouter", None)
-    if openrouter is None:
-        return None
-
-    system_prompt = _judge_system_prompt()
-    user_prompt = _judge_user_prompt(
-        original_indicators=original_indicators,
-        fallback_result=fallback_result,
-        original_query=original_query,
-        original_concept=original_concept,
+    return await _structured_judgment(
+        qs,
+        system_prompt=_judge_system_prompt(),
+        user_prompt=_judge_user_prompt(
+            original_indicators=original_indicators,
+            fallback_result=fallback_result,
+            original_query=original_query,
+            original_concept=original_concept,
+        ),
+        response_model=SemanticMatchJudgment,
+        answer_tokens=220,
+        label="Fallback semantic judge",
+        timeout_s=timeout_s,
     )
-
-    instructor_client = getattr(openrouter, "instructor_client", None)
-    instructor_model = getattr(openrouter, "instructor_model", None)
-    if instructor_client is not None and instructor_model is not None:
-        try:
-            judgment: SemanticMatchJudgment = await instructor_client.chat.completions.create(
-                model=instructor_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_model=SemanticMatchJudgment,
-                max_retries=2,
-                temperature=0.0,
-                max_tokens=220,
-            )
-            return judgment
-        except Exception as exc:
-            logger.warning("Fallback semantic judge (Instructor) failed: %s", exc)
-
-    llm_provider = getattr(openrouter, "llm_provider", None)
-    if llm_provider is None:
-        return None
-
-    try:
-        result = await llm_provider.generate(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.0,
-            max_tokens=220,
-            response_format={"type": "json_object"},
-        )
-        content = result["choices"][0]["message"]["content"]
-        parsed = parse_json_response(content, fix_truncated=True)
-        return SemanticMatchJudgment.model_validate(parsed)
-    except (KeyError, JSONParseError, ValueError) as exc:
-        logger.warning("Fallback semantic judge (manual JSON) failed: %s", exc)
-    except Exception as exc:
-        logger.warning("Fallback semantic judge failed: %s", exc)
-
-    return None
 
 
 async def judge_resolved_indicator(
@@ -238,46 +336,14 @@ async def judge_resolved_indicator(
         f"Resolved indicator candidate: {candidate_payload}"
     )
 
-    instructor_client = getattr(openrouter, "instructor_client", None)
-    instructor_model = getattr(openrouter, "instructor_model", None)
-    if instructor_client is not None and instructor_model is not None:
-        try:
-            judgment: SemanticMatchJudgment = await instructor_client.chat.completions.create(
-                model=instructor_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_model=SemanticMatchJudgment,
-                max_retries=2,
-                temperature=0.0,
-                max_tokens=220,
-            )
-            return judgment
-        except Exception as exc:
-            logger.warning("Resolved-indicator judge (Instructor) failed: %s", exc)
-
-    llm_provider = getattr(openrouter, "llm_provider", None)
-    if llm_provider is None:
-        return None
-
-    try:
-        result = await llm_provider.generate(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.0,
-            max_tokens=220,
-            response_format={"type": "json_object"},
-        )
-        content = result["choices"][0]["message"]["content"]
-        parsed = parse_json_response(content, fix_truncated=True)
-        return SemanticMatchJudgment.model_validate(parsed)
-    except (KeyError, JSONParseError, ValueError) as exc:
-        logger.warning("Resolved-indicator judge (manual JSON) failed: %s", exc)
-    except Exception as exc:
-        logger.warning("Resolved-indicator judge failed: %s", exc)
-
-    return None
+    return await _structured_judgment(
+        qs,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=SemanticMatchJudgment,
+        answer_tokens=220,
+        label="Resolved-indicator judge",
+    )
 
 
 async def judge_execution_result(
@@ -318,46 +384,14 @@ async def judge_execution_result(
         result_summaries=summaries,
     )
 
-    instructor_client = getattr(openrouter, "instructor_client", None)
-    instructor_model = getattr(openrouter, "instructor_model", None)
-    if instructor_client is not None and instructor_model is not None:
-        try:
-            verdict: ExecutionResultJudgment = await instructor_client.chat.completions.create(
-                model=instructor_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_model=ExecutionResultJudgment,
-                max_retries=2,
-                temperature=0.0,
-                max_tokens=260,
-            )
-            return verdict
-        except Exception as exc:
-            logger.warning("Execution-result judge (Instructor) failed: %s", exc)
-
-    llm_provider = getattr(openrouter, "llm_provider", None)
-    if llm_provider is None:
-        return None
-
-    try:
-        result = await llm_provider.generate(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.0,
-            max_tokens=260,
-            response_format={"type": "json_object"},
-        )
-        content = result["choices"][0]["message"]["content"]
-        parsed = parse_json_response(content, fix_truncated=True)
-        return ExecutionResultJudgment.model_validate(parsed)
-    except (KeyError, JSONParseError, ValueError) as exc:
-        logger.warning("Execution-result judge (manual JSON) failed: %s", exc)
-    except Exception as exc:
-        logger.warning("Execution-result judge failed: %s", exc)
-
-    return None
+    return await _structured_judgment(
+        qs,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ExecutionResultJudgment,
+        answer_tokens=260,
+        label="Execution-result judge",
+    )
 
 
 def decide_prefetch_outcome(

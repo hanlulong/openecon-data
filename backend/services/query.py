@@ -9,6 +9,7 @@ import os
 import re
 import time
 from collections import OrderedDict
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import ValidationError
@@ -64,7 +65,10 @@ from ..providers.coingecko import CoinGeckoProvider
 from ..providers.chinamacro import ChinaMacroProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
-from ..utils.providers import ALL_PROVIDERS, provider_progress_labels
+from ..utils.providers import ALL_PROVIDERS, get_provider_spec
+from ..services.rate_limiter import (
+    MAX_RETRY_AFTER_COOLDOWN_SECONDS as _RL_MAX_RETRY_AFTER_COOLDOWN_SECONDS,
+)
 from ..utils.retry import (
     DataNotAvailableError,
     ProviderCoolingDown,
@@ -73,7 +77,13 @@ from ..utils.retry import (
     retry_async,
     variant_retry_allowed,
 )
-from ..utils.request_budget import fallback_allowed
+from ..utils.request_budget import (
+    fallback_allowed,
+    final_provider_stage,
+    io_remaining,
+    provider_stage,
+    provider_stage_decided,
+)
 from ..services.http_pool import extended_timeout
 from ..services.query_decomposition import (
     generate_sub_query,
@@ -85,6 +95,8 @@ from ..services.geography_validation import (
     build_country_coverage_warning_message as _gv_build_country_coverage_warning_message,
 )
 from ..services.user_messages import get_message as _localized_message
+from ..services.user_messages import format_retry_wait as _um_format_retry_wait
+from ..services.user_messages import join_names as _um_join_names
 from ..services.query_parsing import (
     extract_indicator_text_from_refined_query,
     infer_multi_concept_indicators_from_query as _qp_infer_multi_concept_indicators_from_query,
@@ -121,8 +133,11 @@ from ..services.provider_fallback import (
     provider_covers_country_list as _pf_provider_covers_country_list,
 )
 from ..services.semantic_match_judge import (
+    bounded_judge_timeout as _smj_bounded_judge_timeout,
     judge_execution_result as _smj_judge_execution_result,
+    judge_fallback_result as _smj_judge_fallback_result,
     judge_resolved_indicator as _smj_judge_resolved_indicator,
+    judgment_accepts as _smj_judgment_accepts,
 )
 from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
@@ -221,6 +236,22 @@ from ..services.provider_strategy import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class PostFetchProcessingError(RuntimeError):
+    """A failure AFTER the provider answered (coverage improvement,
+    verification, state save). Deliberately neither a verdict nor a no-verdict:
+    the provider's answer stands, so the outcome must not read as an outage
+    and the attempted code stays selectable in a no-data menu."""
+
+
+def _post_fetch_attempt_error(error: Optional[BaseException]) -> Optional[BaseException]:
+    """``error`` re-typed as a PostFetchProcessingError (None stays None)."""
+    if error is None:
+        return None
+    wrapped = PostFetchProcessingError(f"post-fetch processing failed: {type(error).__name__}: {error}")
+    wrapped.__cause__ = error
+    return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -1866,8 +1897,10 @@ class QueryService:
             except Exception as fallback_exc:
                 logger.warning("Fallback after empty response failed: %s", fallback_exc)
 
-            # Semantic recovery re-probes the same provider; after a no-verdict
-            # it cannot help (variant_retry_allowed is the single gate).
+            # Semantic recovery re-phrases and RE-ROUTES the intent; after a
+            # no-verdict fetch error it is skipped (variant_retry_allowed): the
+            # rewrite says nothing about an outage, re-routing mostly lands on
+            # the same unanswering provider, and fallback already ran above.
             recovered_data = (
                 await self._maybe_recover_from_empty_data(query, intent)
                 if variant_retry_allowed(fetch_error)
@@ -1911,6 +1944,17 @@ class QueryService:
                     message=coverage_warning,
                     processingSteps=tracker.to_list() if tracker else None,
                 )
+
+            if is_no_verdict(fetch_error):
+                # Last resort before the honest outage answer, as on the other
+                # two pipelines: an expired cached copy beats no data while the
+                # provider is not answering.
+                stale_response = await self._serve_stale_after_outage(
+                    query, conv_id, intent, execution_plan, pending_state,
+                    _prev_good_intent, _prev_good_state, tracker,
+                )
+                if stale_response is not None:
+                    return stale_response
 
             no_data_clarification = self._build_no_data_indicator_clarification(
                 conversation_id=conv_id,
@@ -2045,6 +2089,60 @@ class QueryService:
         """Delegates to :func:`indicator_clarification.build_indicator_mismatch_hint`."""
         return _ic_build_indicator_mismatch_hint(query, top_series)
 
+    async def _serve_stale_after_outage(
+        self,
+        query: str,
+        conv_id: str,
+        intent: ParsedIntent,
+        execution_plan: Any,
+        pending_state: Any,
+        prev_good_intent: Any,
+        prev_good_state: Any,
+        tracker: Optional['ProcessingTracker'] = None,
+    ) -> Optional[QueryResponse]:
+        """Serve an expired cached copy after a no-verdict, or None.
+
+        Same last resort (and the same verification + state persistence) as
+        _execute_standard_pipeline's; a stale cache read does no provider I/O.
+        """
+        try:
+            stale_data = await self._get_stale_from_cache(
+                normalize_provider_name(intent.apiProvider), intent.parameters or {}
+            )
+        except Exception as stale_exc:
+            logger.warning("Stale cache retrieval failed (last-resort fallback): %s", stale_exc)
+            return None
+        if not stale_data:
+            return None
+        stale_list = stale_data if isinstance(stale_data, list) else [stale_data]
+        verification_error = await self._verify_execution_result(
+            query, intent, execution_plan, stale_list,
+        )
+        if verification_error:
+            if prev_good_intent is not None:
+                conversation_manager.restore_last_intent(conv_id, prev_good_intent)
+            if prev_good_state is not None:
+                conversation_manager.restore_conversation_state(conv_id, prev_good_state)
+            return self._build_verification_failed_response(
+                conversation_id=conv_id,
+                intent=intent,
+                message=verification_error,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+        self._persist_verified_conversation_state(conv_id, pending_state, stale_list, intent=intent)
+        language = getattr(intent, "language", None)
+        return QueryResponse(
+            conversationId=conv_id,
+            intent=intent,
+            data=stale_list,
+            clarificationNeeded=False,
+            message=_localized_message(
+                "stale_cache_served", language,
+                **self._provider_name_kwargs([intent.apiProvider], language),
+            ),
+            processingSteps=tracker.to_list() if tracker else None,
+        )
+
     def _build_no_data_indicator_clarification(
         self,
         conversation_id: str,
@@ -2069,6 +2167,52 @@ class QueryService:
             self, conversation_id, query, intent, processing_steps, attempt_error=attempt_error,
         )
 
+    def _provider_display_names(
+        self, providers: List[Optional[str]], language: Optional[str] = None,
+    ) -> str:
+        """User-facing name(s) for providers, joined as a localized list.
+
+        The registered ProviderSpec.display_name ("FRED", "UN Comtrade"; never
+        the progress label "Federal Reserve"), else the canonical name, else
+        the localized generic "the data provider".
+        """
+        names: List[str] = []
+        for provider in providers or []:
+            key = normalize_provider_name(provider or "")
+            if not key:
+                continue
+            spec = get_provider_spec(key)
+            name = spec.display_name if spec is not None else key
+            if name not in names:
+                names.append(name)
+        if not names:
+            return _localized_message("provider_generic_name", language) or "the data provider"
+        return _um_join_names(names, language)
+
+    def _provider_name_kwargs(
+        self, providers: List[Optional[str]], language: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """``{provider}`` / ``{Provider}`` (sentence-initial) catalog values."""
+        name = self._provider_display_names(providers, language)
+        return {"provider": name, "Provider": name[:1].upper() + name[1:]}
+
+    @staticmethod
+    def _outage_retry_wait_seconds(error: BaseException) -> Optional[float]:
+        """A displayable retry-after for a cooldown, else None.
+
+        Capped at the limiter's longest honored cooldown: a provider-controlled
+        Retry-After can saturate at year 9999, and our limiter re-admits the
+        provider after that cap anyway.
+        """
+        raw = getattr(error, "retry_after_seconds", None)
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if math.isnan(seconds) or seconds <= 0:
+            return None
+        return min(seconds, float(_RL_MAX_RETRY_AFTER_COOLDOWN_SECONDS))
+
     def _build_provider_outage_response(
         self,
         conversation_id: str,
@@ -2079,9 +2223,11 @@ class QueryService:
         """The honest answer when the provider gave no verdict.
 
         Routed on the exception TYPE only: RequestBudgetExhausted (we ran out
-        of request time) -> ``request_timeout``; a ProviderCoolingDown with a
-        retry-after -> the rate-limited text; any other no-verdict ->
-        ``provider_unavailable``. The wording lives in the localized catalog.
+        of request time) -> ``request_timeout``; a ProviderCoolingDown -> the
+        rate-limited text (with its capped retry-after when it has one); any
+        other no-verdict -> ``provider_unavailable``. The provider named is
+        every provider a fan-out reports as unanswered (``error.providers``),
+        else the intent's provider. The wording lives in the localized catalog.
 
         Stores no pending menu, persists no verified conversation state and
         writes no cache: nothing was learned about the data, so a retry or a
@@ -2089,39 +2235,29 @@ class QueryService:
         as after today's no-data menu turn, minus the menu.
         """
         language = getattr(intent, "language", None)
-        provider_key = normalize_provider_name(intent.apiProvider or "")
-        provider = (
-            provider_progress_labels().get(provider_key)
-            or intent.apiProvider
-            or "The data provider"
-        )
+        failed_providers = list(getattr(error, "providers", ()) or ()) or [intent.apiProvider]
+        names = self._provider_name_kwargs(failed_providers, language)
+        wait = None
         if isinstance(error, RequestBudgetExhausted):
-            message_id, error_code, seconds = "request_deadline_exhausted", "request_timeout", None
-        elif (
-            isinstance(error, ProviderCoolingDown)
-            and getattr(error, "retry_after_seconds", None) is not None
-        ):
-            try:
-                seconds = max(1, math.ceil(float(error.retry_after_seconds)))
-            except (TypeError, ValueError, OverflowError):
-                seconds = None
+            message_id, error_code = "request_deadline_exhausted", "request_timeout"
+        elif isinstance(error, ProviderCoolingDown):
+            error_code = "provider_unavailable"
+            seconds = self._outage_retry_wait_seconds(error)
             if seconds is None:
-                message_id, error_code = "provider_unavailable", "provider_unavailable"
+                message_id = "provider_rate_limited_later"
             else:
-                message_id, error_code = "provider_rate_limited", "provider_unavailable"
+                message_id = "provider_rate_limited"
+                wait = _um_format_retry_wait(seconds, language)
         else:
-            message_id, error_code, seconds = "provider_unavailable", "provider_unavailable", None
-        message = _localized_message(
-            message_id, language, provider=provider, seconds=seconds,
-        ) or (
-            f"⚠️ **{provider} is not responding right now**\n\n"
-            f"{provider} did not answer this request, so no data could be "
-            "retrieved. This does not mean the data does not exist. Please try "
-            "again in a few minutes."
+            message_id, error_code = "provider_unavailable", "provider_unavailable"
+        message = _localized_message(message_id, language, wait=wait, **names) or (
+            f"⚠️ **No response from {names['provider']} right now**\n\n"
+            "No data could be retrieved. This does not mean the data does not "
+            "exist. Please try again in a few minutes."
         )
         logger.warning(
             "Provider gave no verdict (%s, %s); answering %s instead of a no-data menu",
-            provider_key or intent.apiProvider, type(error).__name__, error_code,
+            ",".join(str(p) for p in failed_providers), type(error).__name__, error_code,
         )
         return QueryResponse(
             conversationId=conversation_id,
@@ -2169,7 +2305,7 @@ class QueryService:
             )
             return False
 
-        if judgment.decision != "match" or judgment.confidence < 0.75:
+        if not _smj_judgment_accepts(judgment):
             logger.info(
                 "Resolved-indicator judge rejected match: provider=%s code=%s decision=%s confidence=%.2f reason=%s",
                 provider,
@@ -2181,6 +2317,81 @@ class QueryService:
             return False
 
         return True
+
+    async def _judge_fallback_match(
+        self,
+        intent: ParsedIntent,
+        fallback_provider: str,
+        result: List[NormalizedData],
+        semantic_query: Optional[str],
+    ) -> Optional[bool]:
+        """The model judge's ACCEPTANCE decision for a cross-provider fallback.
+
+        True: a confident "match" (semantic_match_judge.judgment_accepts).
+        False: "mismatch", "uncertain" or a low-confidence match.
+        None: the judge is unavailable (no LLM, failure, timeout, or too little
+        request time left to run it) -- the caller keeps its non-LLM decision
+        so an LLM outage does not cascade into rejecting every fallback.
+
+        Bounded by the request budget: a small fixed cap, clamped by the
+        remaining I/O time (deadline minus the answer reserve).
+        """
+        timeout_s = _smj_bounded_judge_timeout()
+        if timeout_s is None:
+            logger.warning(
+                "Fallback judge unavailable for %s: only %.1fs of request time left",
+                fallback_provider, io_remaining() or 0.0,
+            )
+            return None
+        semantic_query = str(semantic_query or "").strip()
+        original_indicators = list(dict.fromkeys(
+            str(item).strip()
+            for item in [semantic_query, *(intent.indicators or [])]
+            if str(item or "").strip()
+        ))
+        started = time.perf_counter()
+        judgment = await _smj_judge_fallback_result(
+            self,
+            original_indicators=original_indicators,
+            fallback_result=result,
+            original_query=self._effective_original_query(intent) or intent.originalQuery,
+            original_concept=(
+                (intent.parameters or {}).get("__semantic_indicator_label") or semantic_query or None
+            ),
+            timeout_s=timeout_s,
+        )
+        latency = time.perf_counter() - started
+        if judgment is None:
+            logger.warning(
+                "Fallback judge unavailable for %s after %.2fs", fallback_provider, latency,
+            )
+            return None
+        accepted = _smj_judgment_accepts(judgment)
+        logger.info(
+            "Fallback judge %s %s: decision=%s confidence=%.2f latency=%.2fs reason=%s",
+            "accepted" if accepted else "rejected",
+            fallback_provider,
+            judgment.decision,
+            judgment.confidence,
+            latency,
+            judgment.reason,
+        )
+        return accepted
+
+    def _cross_provider_fallback_refused(self, intent: ParsedIntent) -> bool:
+        """True when cross-provider fallback must not run for ``intent``: it is
+        provider-locked, or the user explicitly named its provider (an
+        explicit provider request is part of the intent and wins).
+
+        The single predicate for _try_with_fallback's refusal and for marking
+        such an intent's own fetch as the request's final provider stage.
+        """
+        if _ir_is_provider_locked(intent.parameters or {}):
+            return True
+        explicit = normalize_provider_name(
+            self._detect_explicit_provider(str(intent.originalQuery or "")) or ""
+        )
+        return bool(explicit) and explicit == normalize_provider_name(intent.apiProvider or "")
 
     def _use_minimal_execution_plan(self) -> bool:
         return bool(getattr(self.settings, "use_minimal_execution_plan", False))
@@ -3598,6 +3809,14 @@ class QueryService:
         if not data:
             logger.debug(f"Skipping cache save — empty data for {provider}")
             return
+        if any(
+            getattr(series, "fetch_incomplete", False) is True
+            for series in (data if isinstance(data, list) else [data])
+        ):
+            # A fan-out left sub-requests unanswered (provider outage): an
+            # honest partial answer now, never the cached complete answer.
+            logger.info(f"Skipping cache save for {provider} — provider fetch was incomplete")
+            return
         if not self._cached_result_has_complete_country_coverage(params, data):
             logger.info(f"Skipping cache save for {provider} — incomplete multi-country coverage")
             return
@@ -4392,14 +4611,7 @@ class QueryService:
             # out-of-window data. Surface the honest no-data path instead.
             raise primary_error
 
-        explicit_provider_requested = normalize_provider_name(
-            self._detect_explicit_provider(str(intent.originalQuery or "")) or ""
-        )
-        provider_locked = _ir_is_provider_locked(intent.parameters or {})
-        if provider_locked or (
-            explicit_provider_requested
-            and explicit_provider_requested == primary_provider
-        ):
+        if self._cross_provider_fallback_refused(intent):
             logger.info(
                 "🔒 Skipping cross-provider fallback for provider-locked intent (%s)",
                 primary_provider,
@@ -4485,37 +4697,64 @@ class QueryService:
                 resolvedQuery=intent.resolvedQuery,
             )
 
-        async def _try_single_fallback(fallback_provider: str) -> Optional[list]:
-            """Try a single fallback provider, return data or None."""
+        async def _try_single_fallback(fallback_provider: str, *, last_stage: bool) -> Optional[list]:
+            """Try a single fallback provider, return data or None.
+
+            ``last_stage``: no further fallback attempt is scheduled after this
+            one, so its fetch is the request's final provider stage (retries
+            need only fit before the answer reserve, not the retry reserve).
+            """
             logger.warning(f"Attempting fallback from {primary_provider} to {fallback_provider}")
             fb_intent = await asyncio.to_thread(_build_fallback_intent, fallback_provider)
             try:
-                # Mirror the primary path's dispatch: a fallback intent that
-                # carries more than one indicator must go through the
-                # multi-indicator fetcher. Calling _fetch_data directly collapsed
-                # it to indicators_to_fetch=[first] and silently dropped every
-                # other requested series (data loss on a multi-indicator query
-                # whose primary provider failed).
-                if fb_intent.indicators and len(fb_intent.indicators) > 1:
-                    result = await self._fetch_multi_indicator_data(fb_intent)
-                else:
-                    result = await self._fetch_data(fb_intent)
-                if result and self._is_fallback_relevant(
+                with provider_stage(final=last_stage):
+                    # Mirror the primary path's dispatch: a fallback intent
+                    # that carries more than one indicator must go through the
+                    # multi-indicator fetcher. Calling _fetch_data directly
+                    # collapsed it to indicators_to_fetch=[first] and silently
+                    # dropped every other requested series (data loss on a
+                    # multi-indicator query whose primary provider failed).
+                    if fb_intent.indicators and len(fb_intent.indicators) > 1:
+                        result = await self._fetch_multi_indicator_data(fb_intent)
+                    else:
+                        result = await self._fetch_data(fb_intent)
+                # Acceptance: the structural country checks and the cheap
+                # keyword gate may REJECT, but only the model judge may ACCEPT
+                # (a keyword overlap accepted e.g. "high-tech exports % of
+                # manufactured exports" for "China exports to US"). A judge
+                # that is unavailable keeps the gate's decision so an LLM
+                # outage does not cascade.
+                relevant = bool(result) and self._is_fallback_relevant(
                     intent.indicators,
                     result,
                     target_countries,
                     intent.originalQuery,
-                ):
-                    logger.info(f"✅ Fallback to {fallback_provider} succeeded")
-                    return result
-                else:
-                    logger.warning(
-                        f"⚠️ Fallback to {fallback_provider} returned unrelated data, skipping"
-                    )
-                    return None
+                )
             except Exception as e:
                 logger.warning(f"Fallback to {fallback_provider} failed: {e}")
                 return None
+            if not relevant:
+                logger.warning(
+                    f"⚠️ Fallback to {fallback_provider} returned unrelated data, skipping"
+                )
+                return None
+            try:
+                accepted = await self._judge_fallback_match(intent, fallback_provider, result, indicator)
+            except Exception as judge_exc:  # the judge is advisory: unavailable
+                logger.warning("Fallback judge failed for %s: %s", fallback_provider, judge_exc)
+                accepted = None
+            if accepted is None:
+                logger.warning(
+                    "Fallback judge unavailable; keeping the keyword gate's acceptance of %s",
+                    fallback_provider,
+                )
+            elif not accepted:
+                logger.warning(
+                    f"⚠️ Fallback to {fallback_provider} rejected by the semantic judge, skipping"
+                )
+                return None
+            logger.info(f"✅ Fallback to {fallback_provider} succeeded")
+            return result
 
         def _restamp_intent_to_serving_provider(result: Optional[list]) -> Optional[list]:
             """Make the ORIGINAL intent reflect the provider that actually
@@ -4562,6 +4801,39 @@ class QueryService:
                     intent.indicators = [str(indicator).strip()]
             return result
 
+        def _disclose_substitution(result: Optional[list]) -> Optional[list]:
+            """Prepend a localized "served by <other provider>" transparency
+            note (the metadata.notes convention) when no served series comes
+            from the primary provider. Copies, never mutates: the series may
+            be shared with the provider-result cache."""
+            if not result:
+                return result
+            serving = [
+                normalize_provider_name(getattr(getattr(series, "metadata", None), "source", "") or "")
+                for series in result
+            ]
+            serving = [name for name in dict.fromkeys(serving) if name]
+            if not serving or primary_provider in serving:
+                return result
+            language = getattr(intent, "language", None)
+            primary_names = self._provider_name_kwargs([primary_provider], language)
+            note = _localized_message(
+                "fallback_provider_substituted", language,
+                primary=primary_names["provider"], Primary=primary_names["Provider"],
+                serving=self._provider_display_names(serving, language),
+            )
+            first = result[0]
+            metadata = getattr(first, "metadata", None)
+            if not note or metadata is None or note in (metadata.notes or []):
+                return result
+            decorated = first.model_copy(update={
+                "metadata": metadata.model_copy(update={"notes": [note] + list(metadata.notes or [])}),
+            })
+            return [decorated, *result[1:]]
+
+        def _serve(result: Optional[list]) -> Optional[list]:
+            return _restamp_intent_to_serving_provider(_disclose_substitution(result))
+
         # --- Parallel fallback for top-2 providers ---
         # When 2+ fallback providers are available, try the top 2 in parallel
         # to reduce latency (especially when WB circuit breaker is open).
@@ -4571,8 +4843,8 @@ class QueryService:
             logger.info(f"🔄 Parallel fallback: trying {top_two} simultaneously")
 
             results = await asyncio.gather(
-                _try_single_fallback(top_two[0]),
-                _try_single_fallback(top_two[1]),
+                _try_single_fallback(top_two[0], last_stage=not remaining),
+                _try_single_fallback(top_two[1], last_stage=not remaining),
                 return_exceptions=True,
             )
 
@@ -4582,19 +4854,23 @@ class QueryService:
                     logger.warning(f"Parallel fallback {top_two[i]} raised: {result}")
                     last_error = result
                 elif result is not None:
-                    return _restamp_intent_to_serving_provider(result)
+                    return _serve(result)
 
             # Both top-2 failed — continue sequentially with remaining
-            for fallback_provider in remaining:
-                result = await _try_single_fallback(fallback_provider)
+            for position, fallback_provider in enumerate(remaining):
+                result = await _try_single_fallback(
+                    fallback_provider, last_stage=position == len(remaining) - 1,
+                )
                 if result is not None:
-                    return _restamp_intent_to_serving_provider(result)
+                    return _serve(result)
         else:
             # Only 1 fallback provider — try it directly
-            for fallback_provider in fallback_providers:
-                result = await _try_single_fallback(fallback_provider)
+            for position, fallback_provider in enumerate(fallback_providers):
+                result = await _try_single_fallback(
+                    fallback_provider, last_stage=position == len(fallback_providers) - 1,
+                )
                 if result is not None:
-                    return _restamp_intent_to_serving_provider(result)
+                    return _serve(result)
 
         # All fallbacks failed
         logger.error(f"All fallbacks failed for {primary_provider}")
@@ -6688,9 +6964,23 @@ class QueryService:
             if tracker_token is not None:
                 reset_processing_tracker(tracker_token)
 
+    def _own_fetch_stage(self, intent: ParsedIntent):
+        """The provider-stage context for ``intent``'s OWN fetch.
+
+        When cross-provider fallback is refused for the intent (provider-locked
+        or explicitly named provider), nothing can follow this fetch, so it is
+        the request's final provider stage: final_provider_stage() lets its
+        retries use the time the retry reserve would otherwise hold back for a
+        fallback that cannot run. Otherwise a no-op.
+        """
+        if not provider_stage_decided() and self._cross_provider_fallback_refused(intent):
+            return final_provider_stage()
+        return nullcontext()
+
     async def _fetch_multi_indicator_data(self, intent: ParsedIntent) -> List[NormalizedData]:
         """Delegates to :func:`data_fetcher.fetch_multi_indicator_data`."""
-        return await _df_fetch_multi_indicator_data(self, intent)
+        with self._own_fetch_stage(intent):
+            return await _df_fetch_multi_indicator_data(self, intent)
 
     async def _fetch_data(
         self,
@@ -6715,6 +7005,12 @@ class QueryService:
         Scoped to __decision_source == "llm_pick": user-exact and verified
         carried-over codes fail honestly rather than silently swap series.
         """
+        if not provider_stage_decided() and self._cross_provider_fallback_refused(intent):
+            # No fallback can follow this fetch: run it (once, re-entering
+            # with the stage decided) as the request's final provider stage.
+            # A fallback attempt's stage was already decided by its caller.
+            with self._own_fetch_stage(intent):
+                return await self._fetch_data(intent, execution_plan=execution_plan)
         # Subnational-discard retry conduit: process_query re-runs the impl
         # with the discarded code carried in a contextvar (the only conduit
         # that reaches every intent-acquisition path). Merge it here at the
@@ -7042,16 +7338,25 @@ class QueryService:
         # and use the parallel multi-indicator fetch path.
         is_multi_indicator = bool(intent.indicators and len(intent.indicators) > 1)
 
-        # Primary fetch attempt
+        # Primary fetch attempt. Only the FETCH's own exception is the
+        # provider outcome (fetch_error): a failure in the post-fetch
+        # processing below (country-coverage improvement, verification, state
+        # save) happened after the provider answered, so it must never be told
+        # as "<provider> is not responding" nor gate semantic recovery.
+        post_fetch_error: Optional[Exception] = None
         try:
-            if is_multi_indicator:
-                logger.info(
-                    "📊 Standard pipeline: multi-indicator query (%d indicators)",
-                    len(intent.indicators),
-                )
-                result = await self._fetch_multi_indicator_data(intent)
-            else:
-                result = await self._fetch_data(intent, execution_plan=execution_plan)
+            try:
+                if is_multi_indicator:
+                    logger.info(
+                        "📊 Standard pipeline: multi-indicator query (%d indicators)",
+                        len(intent.indicators),
+                    )
+                    result = await self._fetch_multi_indicator_data(intent)
+                else:
+                    result = await self._fetch_data(intent, execution_plan=execution_plan)
+            except Exception as primary_exc:
+                fetch_error = primary_exc
+                raise
             if result:
                 # _fetch_data may return QueryResponse or list of NormalizedData
                 if isinstance(result, QueryResponse):
@@ -7190,13 +7495,20 @@ class QueryService:
                         processingSteps=tracker.to_list() if tracker else None,
                     )
         except Exception as e:
-            fetch_error = e
-            logger.warning(f"Standard pipeline primary fetch error: {e}", exc_info=True)
+            if e is fetch_error:
+                logger.warning(f"Standard pipeline primary fetch error: {e}", exc_info=True)
+            else:
+                post_fetch_error = e
+                logger.warning(
+                    "Standard pipeline post-fetch processing error: %s", e, exc_info=True,
+                )
 
         # Fallback: try alternative providers before giving up
         try:
             logger.info("🔄 Standard pipeline: attempting fallback providers...")
-            fallback_data = await self._try_with_fallback(intent, fetch_error or Exception("No data"))
+            fallback_data = await self._try_with_fallback(
+                intent, fetch_error or post_fetch_error or Exception("No data"),
+            )
             if fallback_data:
                 logger.info("✅ Standard pipeline: fallback provider succeeded")
                 fallback_data = self._rerank_data_by_query_relevance(query, fallback_data)
@@ -7238,8 +7550,11 @@ class QueryService:
         except Exception as fallback_exc:
             logger.warning("Standard pipeline fallback providers failed: %s", fallback_exc)
 
-        # Semantic recovery pass (re-probes the same provider: skipped after
-        # a no-verdict fetch error, see variant_retry_allowed)
+        # Semantic recovery pass: re-phrases the intent (distilled metric /
+        # expanded countries) and RE-ROUTES it. After a no-verdict fetch error
+        # it is skipped (variant_retry_allowed): the rewrite says nothing about
+        # an outage, re-routing mostly lands on the same unanswering provider,
+        # and cross-provider fallback above already had its chance.
         try:
             recovered_data = (
                 await self._maybe_recover_from_empty_data(query, intent)
@@ -7332,7 +7647,10 @@ class QueryService:
             query=query,
             intent=intent,
             processing_steps=tracker.to_list() if tracker else None,
-            attempt_error=fetch_error,
+            attempt_error=(
+                fetch_error if fetch_error is not None
+                else _post_fetch_attempt_error(post_fetch_error)
+            ),
         )
         if clarification_response:
             return clarification_response

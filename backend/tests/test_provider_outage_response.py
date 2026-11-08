@@ -82,11 +82,17 @@ def service():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("message_id", ["provider_unavailable", "provider_rate_limited", "request_deadline_exhausted"])
+@pytest.mark.parametrize("message_id", [
+    "provider_unavailable", "provider_rate_limited", "provider_rate_limited_later",
+    "request_deadline_exhausted", "stale_cache_served",
+])
 def test_outage_messages_exist_in_en_and_zh(message_id):
     assert {"en", "zh"} <= set(_MESSAGES[message_id])
     for language in ("en", "zh"):
-        text = get_message(message_id, language, provider="UN Comtrade", seconds=30)
+        text = get_message(
+            message_id, language, provider="UN Comtrade", Provider="UN Comtrade",
+            wait="about 30 seconds",
+        )
         assert "UN Comtrade" in text and "{" not in text
     # A missing placeholder never raises (the get_message contract).
     assert get_message(message_id, "zh")

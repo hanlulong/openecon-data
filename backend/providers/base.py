@@ -379,6 +379,11 @@ class BaseProvider(ABC):
                 except ProviderRateLimitWaitExceeded as exc:
                     retry_refused = True
                     raise _RetryAdmissionRefused() from exc
+            if is_retry and not retry_fits(0.0):
+                # The retry admission wait outlasted the room the stop check
+                # saw: stop without sending (the last genuine failure stands).
+                budget_limited = True
+                raise _RetryAdmissionRefused()
             attempts += 1
             # Only a RETRY's timeout may be capped by the request deadline.
             timeout = retry_attempt_timeout(attempt_timeout) if is_retry else attempt_timeout
@@ -423,6 +428,15 @@ class BaseProvider(ABC):
             await admit_provider_request(provider_key)
             if _breaker_refuses_now(breaker):
                 raise pybreaker.CircuitBreakerError("Availability cooldown is active")
+            # The admission wait (limiter spacing) may itself have consumed the
+            # remaining request time; the first attempt's timeout is never
+            # capped, so starting it now could run into the answer reserve.
+            # Same zero-I/O refusal as above, likewise never recorded.
+            if not budget_allows(0.0):
+                raise RequestBudgetExhausted(
+                    f"{self.provider_name}: request deadline reached while waiting "
+                    "for admission; request not sent"
+                )
             failure: Optional[BaseException] = None
             response = None
             try:

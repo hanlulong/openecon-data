@@ -29,6 +29,7 @@ from ..utils.retry import (
     ProviderCoolingDown,
     ProviderUnavailable,
     RequestBudgetExhausted,
+    is_no_verdict,
     parse_retry_after,
     variant_retry_allowed,
 )
@@ -1357,6 +1358,10 @@ class ComtradeProvider(BaseProvider):
         # is not answering (or be refused locally during a cooldown); the rest
         # of the fan-out -- and the fallback envelopes below -- are skipped.
         provider_stop: Optional[ProviderUnavailable] = None
+        # True once any sub-request of this fetch went unanswered (a
+        # no-verdict, or skipped after the stop above). The merged result is
+        # then an honest PARTIAL answer and must not be cached as complete.
+        unanswered = False
 
         async def _guarded_fetch(
             reporter_raw: str,
@@ -1364,10 +1369,11 @@ class ComtradeProvider(BaseProvider):
             period_param: str,
             flow_code_arg: str = flow_code,
         ) -> List[NormalizedData]:
-            nonlocal provider_stop
+            nonlocal provider_stop, unanswered
             async with semaphore:
                 async with _global_request_semaphore():
                     if provider_stop is not None:
+                        unanswered = True
                         return []
                     await _respect_global_request_spacing()
                     try:
@@ -1389,7 +1395,9 @@ class ComtradeProvider(BaseProvider):
             chunks: List[str],
             flow_code_arg: str,
         ) -> Tuple[List[NormalizedData], Optional[BaseException]]:
+            nonlocal unanswered
             if provider_stop is not None:
+                unanswered = True
                 return [], provider_stop
             tasks = [
                 _guarded_fetch(reporter_raw, partner_code, period_param, flow_code_arg)
@@ -1425,6 +1433,7 @@ class ComtradeProvider(BaseProvider):
                     len(tasks),
                 )
                 # Unanswered sub-requests are no verdict, never "no records".
+                unanswered = True
                 error_cls = RequestBudgetExhausted if budget_bound else ProviderUnavailable
                 return [], error_cls(
                     f"UN Comtrade did not answer {len(tasks)} sub-request(s) within the "
@@ -1437,6 +1446,10 @@ class ComtradeProvider(BaseProvider):
                 if isinstance(result, BaseException):
                     logger.debug("Comtrade sub-task failed: %s", result)
                     newest_error = result
+                    # Only a plain DataNotAvailableError is the provider
+                    # answering this sub-request; anything else left it open.
+                    if not isinstance(result, DataNotAvailableError) or is_no_verdict(result):
+                        unanswered = True
                     continue
                 flattened.extend(result)
             return flattened, provider_stop or newest_error
@@ -1541,6 +1554,10 @@ class ComtradeProvider(BaseProvider):
         self._disclose_unreported_trailing_years(
             merged_results, start, end, freq_code, fetch_complete=fetch_complete
         )
+        if unanswered:
+            # Served as the partial answer it is, never cached as complete.
+            for series in merged_results:
+                series.mark_fetch_incomplete()
         return merged_results
 
     @staticmethod
@@ -1955,7 +1972,7 @@ class ComtradeProvider(BaseProvider):
         start_date = balance_points[0]["date"] if balance_points else None
         end_date = balance_points[-1]["date"] if balance_points else None
 
-        return NormalizedData(
+        balance = NormalizedData(
             metadata=Metadata(
                 source="UN Comtrade",
                 indicator=f"Trade Balance{partner_desc}",
@@ -1974,3 +1991,6 @@ class ComtradeProvider(BaseProvider):
             ),
             data=balance_points,
         )
+        if any(series.fetch_incomplete for series in [*exports_data, *imports_data]):
+            balance.mark_fetch_incomplete()
+        return balance

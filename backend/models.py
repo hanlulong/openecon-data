@@ -3,7 +3,7 @@ import math
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,19 @@ class Metadata(BaseModel):
 class NormalizedData(BaseModel):
     metadata: Metadata
     data: List[DataPoint]
+    # Process-local and never serialized: set when the provider fetch that
+    # produced this series left at least one sub-request unanswered (a
+    # no-verdict: outage, timeout, cooldown, or skipped after one). The series
+    # is an honest partial answer for THIS request, but the result must never
+    # be cached as the complete answer (QueryService._save_to_cache).
+    _fetch_incomplete: bool = PrivateAttr(default=False)
+
+    def mark_fetch_incomplete(self) -> None:
+        self._fetch_incomplete = True
+
+    @property
+    def fetch_incomplete(self) -> bool:
+        return self._fetch_incomplete
 
 
 # Contract enum for ParsedIntent.queryType (see SimplifiedPrompt output schema).

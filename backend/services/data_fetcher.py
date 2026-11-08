@@ -4540,6 +4540,9 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
 
     # Create separate intents for each indicator
     fetch_tasks = []
+    # The provider each leg went to (aligned with fetch_tasks), so an
+    # all-outage can name the providers that did not answer.
+    leg_providers: List[str] = []
     for indicator in intent.indicators:
         params = dict(intent.parameters) if intent.parameters else {}
 
@@ -4624,6 +4627,7 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
             exceptions=(httpx.HTTPError, asyncio.TimeoutError),
         )
         fetch_tasks.append(task)
+        leg_providers.append(single_provider)
 
     # Fetch all indicators in parallel with a total timeout
     num_countries = len(
@@ -4708,6 +4712,7 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
                 f"Could not fetch any of the requested indicators: {', '.join(intent.indicators)}"
             ),
             context="Could not fetch any of the requested indicators",
+            sources=leg_providers,
         )
 
     # Partial success: at least one indicator resolved but others did not.

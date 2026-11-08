@@ -73,7 +73,12 @@ def test_fallback_restamps_provider_and_clears_primary_code():
 
     result = run(svc._try_with_fallback(intent, Exception("primary failed")))
 
-    assert result is served
+    # The served series, disclosed on a copy (the fetched object is untouched).
+    assert [series.metadata.seriesId for series in result] == ["FP.CPI.TOTL.ZG"]
+    assert result[0].metadata.notes == [
+        "FRED could not serve this request, so this data comes from World Bank instead."
+    ]
+    assert served[0].metadata.notes is None
     # apiProvider now reflects the provider that actually served the data.
     assert intent.apiProvider == "WORLDBANK"
     # The FRED-namespace resolved code fields are cleared so the next turn

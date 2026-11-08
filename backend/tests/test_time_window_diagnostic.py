@@ -54,6 +54,8 @@ def service(responses):
         _get_from_cache=AsyncMock(return_value=None),
         _save_to_cache=AsyncMock(),
         _normalize_bis_metadata_labels=lambda result: None,
+        # _fetch_data asks whether a fallback can follow (final provider stage).
+        _cross_provider_fallback_refused=lambda intent: False,
         eurostat_provider=SimpleNamespace(fetch_indicator=AsyncMock(side_effect=fetch)),
     )
     return svc, calls

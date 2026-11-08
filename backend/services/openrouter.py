@@ -58,6 +58,33 @@ _CIRCUIT_OPEN_SECONDS = 60.0
 _local_circuit_open_until: float = 0.0
 
 
+# Completion tokens a reasoning model (production's local vLLM gpt-oss-120b)
+# spends on reasoning BEFORE its JSON answer, even at reasoning_effort=low.
+_REASONING_HEADROOM_TOKENS = 1000
+
+
+def structured_completion_kwargs(settings: Any, answer_tokens: int) -> Dict[str, Any]:
+    """``max_tokens`` / ``extra_body`` for ONE structured (JSON) completion on
+    the configured LLM, given the tokens the JSON answer itself needs.
+
+    Reasoning models spend completion tokens on reasoning BEFORE the JSON
+    answer. On vLLM two controls keep that bounded (the same pair
+    VLLMProvider.generate applies on the manual path): ``reasoning_effort=low``
+    caps the ramble at the source, and reasoning headroom on top of the answer
+    budget stops residual long-reasoning cases from truncating mid-JSON
+    (finish_reason=length fails validation and burns a whole Instructor retry).
+    Every Instructor call on the configured model goes through this, so a
+    small judge gets the same treatment as the parse.
+    """
+    is_vllm = getattr(settings, "llm_provider", None) in ("vllm",)
+    if is_vllm:
+        return {
+            "max_tokens": int(answer_tokens) + _REASONING_HEADROOM_TOKENS,
+            "extra_body": {"reasoning_effort": "low"},
+        }
+    return {"max_tokens": int(answer_tokens), "extra_body": {}}
+
+
 def _local_circuit_is_open() -> bool:
     """True while the local provider is being skipped after a recent timeout."""
     return time.monotonic() < _local_circuit_open_until
@@ -385,15 +412,11 @@ class OpenRouterService:
         messages.append({"role": "user", "content": query})
 
         # Reasoning models spend completion tokens on reasoning BEFORE the
-        # JSON answer. Two controls keep that bounded, mirroring what
-        # VLLMProvider.generate already does on the manual-fallback path:
-        # reasoning_effort=low (vLLM) caps the ramble at the source, and a
-        # generous max_tokens stops residual long-reasoning cases from
-        # truncating mid-JSON — truncation fails Pydantic validation and
-        # burns a full instructor retry (8-20s each) per attempt.
-        is_vllm = self.settings.llm_provider in ("vllm",)
-        max_tok = 1500 if is_vllm else 500
-        extra_body = {"reasoning_effort": "low"} if is_vllm else {}
+        # JSON answer (see structured_completion_kwargs): on vLLM this is
+        # max_tokens=1500 with reasoning_effort=low, else 500 — truncation
+        # fails Pydantic validation and burns a full instructor retry (8-20s
+        # each) per attempt.
+        completion = structured_completion_kwargs(self.settings, 500)
 
         llm_start = time.perf_counter()
         intent: ParsedIntent = await self.instructor_client.chat.completions.create(
@@ -402,8 +425,7 @@ class OpenRouterService:
             response_model=ParsedIntent,
             max_retries=3,
             temperature=0.0,
-            max_tokens=max_tok,
-            extra_body=extra_body,
+            **completion,
         )
         llm_elapsed = time.perf_counter() - llm_start
         intent.originalQuery = query

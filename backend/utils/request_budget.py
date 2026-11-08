@@ -12,6 +12,10 @@ contextvar, so the retry core can:
   ``answer_reserve_s`` seconds (no I/O, typed no-verdict);
 - stop retrying, and cap a RETRY attempt's timeout, so that a retry leaves
   ``retry_reserve_s`` seconds for cross-provider fallback and the answer.
+  Inside the FINAL provider stage (``final_provider_stage``: the cross-provider
+  fallback fetch itself, or a fetch no fallback can follow) there is no later
+  stage to leave time for, so a retry only has to fit before the answer
+  reserve.
 
 Every operation here only SHORTENS work: no timeout or retry count is ever
 raised, and a first attempt's timeout is never touched. With no budget active
@@ -53,6 +57,14 @@ class RequestBudget:
 _CURRENT: ContextVar[Optional[RequestBudget]] = ContextVar(
     "openecon_request_budget", default=None
 )
+
+# TASK-LOCAL marker (never a field on the shared RequestBudget): concurrent
+# fetch legs of one request share the budget object, but only the legs that run
+# inside ``final_provider_stage`` may spend the retry reserve. A contextvar set
+# inside a task is invisible to its siblings and to the caller once reset.
+# None: no stage decided yet; True/False: an enclosing caller decided whether
+# this is the final provider stage (an inner fetch never re-decides it).
+_FINAL_STAGE: ContextVar[Optional[bool]] = ContextVar("openecon_final_provider_stage", default=None)
 
 
 def current_budget() -> Optional[RequestBudget]:
@@ -145,26 +157,68 @@ def budget_allows(seconds: float = 0.0) -> bool:
     return remaining > seconds
 
 
+@contextmanager
+def provider_stage(*, final: bool) -> Iterator[None]:
+    """Decide, for the enclosed provider work, whether it is the request's
+    LAST provider stage.
+
+    ``final=True``: no cross-provider fallback can follow it, so its retries
+    are checked against the answer reserve instead of the retry reserve (whose
+    only purpose is leaving time for that fallback). ``final=False`` records
+    that a later stage IS scheduled, so an inner fetch does not re-decide.
+    Task-local: it covers the current task and the tasks it spawns, and is
+    reset on exit.
+    """
+    token = _FINAL_STAGE.set(bool(final))
+    try:
+        yield
+    finally:
+        _FINAL_STAGE.reset(token)
+
+
+def final_provider_stage():
+    """``provider_stage(final=True)``."""
+    return provider_stage(final=True)
+
+
+def in_final_provider_stage() -> bool:
+    """True inside ``final_provider_stage`` (for the current task)."""
+    return bool(_FINAL_STAGE.get())
+
+
+def provider_stage_decided() -> bool:
+    """True when an enclosing ``provider_stage`` already decided the stage."""
+    return _FINAL_STAGE.get() is not None
+
+
+def _retry_reserve(budget: RequestBudget) -> float:
+    """Seconds a retry must leave: the retry reserve while a later
+    cross-provider fallback stage is still possible, else the answer reserve."""
+    return budget.answer_reserve_s if _FINAL_STAGE.get() else budget.retry_reserve_s
+
+
 def retry_fits(upcoming_sleep: float) -> bool:
     """True when a retry that first sleeps ``upcoming_sleep`` still leaves a
-    useful attempt before the retry reserve (always True with no budget)."""
+    useful attempt before the retry reserve (the answer reserve in the final
+    provider stage; always True with no budget)."""
     budget = current_budget()
     if budget is None:
         return True
     return (
-        budget.remaining() - float(upcoming_sleep or 0.0) - budget.retry_reserve_s
+        budget.remaining() - float(upcoming_sleep or 0.0) - _retry_reserve(budget)
         >= MIN_RETRY_ATTEMPT_SECONDS
     )
 
 
 def retry_attempt_timeout(requested: float) -> float:
     """The timeout for a RETRY attempt: ``requested`` capped so the attempt
-    ends before the retry reserve, never below MIN_RETRY_ATTEMPT_SECONDS and
-    never above ``requested`` (no budget: ``requested`` unchanged)."""
+    ends before the retry reserve (the answer reserve in the final provider
+    stage), never below MIN_RETRY_ATTEMPT_SECONDS and never above
+    ``requested`` (no budget: ``requested`` unchanged)."""
     budget = current_budget()
     if budget is None:
         return requested
-    cap = budget.remaining() - budget.retry_reserve_s
+    cap = budget.remaining() - _retry_reserve(budget)
     if cap >= requested:
         return requested
     # min(): a requested timeout below the floor is never raised to it.

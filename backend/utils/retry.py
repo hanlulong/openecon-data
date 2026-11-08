@@ -38,10 +38,17 @@ class ProviderUnavailable(DataNotAvailableError):
     cross-provider fallback behaving unchanged.
     """
 
+    #: Canonical names of the providers that gave no verdict, when a fan-out
+    #: knows them (aggregate_failure ``sources``); empty means "the intent's
+    #: provider". Structured, so the outage answer never parses the message.
+    providers: tuple = ()
+
     def with_context(self, context: str) -> "ProviderUnavailable":
         """Return a copy of the SAME class whose message is prefixed with
         caller context (a re-wrap that must not demote it to a verdict)."""
-        return type(self)(f"{context}: {self}")
+        wrapped = type(self)(f"{context}: {self}")
+        wrapped.providers = self.providers
+        return wrapped
 
 
 class ProviderCoolingDown(ProviderUnavailable):
@@ -59,9 +66,11 @@ class ProviderCoolingDown(ProviderUnavailable):
 
     def with_context(self, context: str) -> "ProviderCoolingDown":
         """Return a copy whose message is prefixed with caller context."""
-        return ProviderCoolingDown(
+        wrapped = ProviderCoolingDown(
             f"{context}: {self}", retry_after_seconds=self.retry_after_seconds
         )
+        wrapped.providers = self.providers
+        return wrapped
 
 
 def is_provider_unavailable(exc: BaseException | None) -> bool:
@@ -120,6 +129,7 @@ def aggregate_failure(
     verdict: Optional[BaseException],
     *,
     context: str,
+    sources: Optional[Iterable[Optional[str]]] = None,
 ) -> Optional[BaseException]:
     """Combine one outcome per sub-request into the error a fan-out raises.
 
@@ -133,22 +143,36 @@ def aggregate_failure(
     None) is returned unchanged.
 
     Deliberately conservative: mixed outcomes keep today's plain verdict.
+
+    ``sources`` (optional, aligned with ``outcomes``) names the provider each
+    sub-request went to; the typed no-verdict then carries them in
+    ``providers`` (de-duplicated, in order) so the answer can name every
+    provider that did not answer.
     """
     items = list(outcomes)
     if not items or not all(
         isinstance(item, BaseException) and is_no_verdict(item) for item in items
     ):
         return verdict
+    aggregated: Optional[ProviderUnavailable] = None
     for item in items:
         if isinstance(item, ProviderCoolingDown):
-            return item.with_context(context)
-    for item in items:
-        if isinstance(item, ProviderUnavailable):
-            return item.with_context(context)
-    raw = items[0]
-    wrapped = ProviderUnavailable(f"{context}: {type(raw).__name__}: {raw}")
-    wrapped.__cause__ = raw
-    return wrapped
+            aggregated = item.with_context(context)
+            break
+    if aggregated is None:
+        for item in items:
+            if isinstance(item, ProviderUnavailable):
+                aggregated = item.with_context(context)
+                break
+    if aggregated is None:
+        raw = items[0]
+        aggregated = ProviderUnavailable(f"{context}: {type(raw).__name__}: {raw}")
+        aggregated.__cause__ = raw
+    if sources is not None:
+        named = tuple(dict.fromkeys(str(name) for name in sources if str(name or "").strip()))
+        if named:
+            aggregated.providers = named
+    return aggregated
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:
