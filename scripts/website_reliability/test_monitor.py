@@ -26,6 +26,9 @@ with patch.dict(sys.modules, {"check_websites": websites}):
     monitor = load_module("website_reliability_monitor", "monitor.py")
 
 OPENECON_HOSTS = tuple(sorted(host for host in websites.HOSTS if websites.site_group(host) == "openecon"))
+# A probed non-OpenEcon vhost that is expected UP (not in KNOWN_DOWN), so its
+# 503 is a real "other"-group failure rather than accepted known degradation.
+OTHER_FAILING_HOST = "crypto.hansearch.com"
 
 
 def website_report(degraded=False):
@@ -122,7 +125,7 @@ def test_any_openecon_group_row_failure_is_fatal(host, field, value):
     assert summary["other_failed_checks"] == []
 
 
-@pytest.mark.parametrize("host,fatal", [("data.openecon.ai", True), ("luhan.io", False), ("jp.hansearch.com", False)])
+@pytest.mark.parametrize("host,fatal", [("data.openecon.ai", True), ("luhan.io", False), (OTHER_FAILING_HOST, False)])
 def test_new_503_is_a_regression_fatal_only_in_openecon_group(host, fatal):
     report = website_report()
     next(row for row in report["results"] if row["host"] == host)["http_status"] = 503
@@ -135,7 +138,11 @@ def test_new_503_is_a_regression_fatal_only_in_openecon_group(host, fatal):
 def test_site_groups_are_derived_from_canonical_targets():
     assert set(OPENECON_HOSTS) == {"data.openecon.ai", "openecon.ai", "www.openecon.ai", "deepecon.ai", "www.deepecon.ai"}
     assert websites.site_group("jp.hansearch.com") == "other"
-    assert "jp.hansearch.com" not in websites.KNOWN_DOWN  # status of that vhost is the owner's call
+    # jp is owner-retired (KNOWN_DOWN since 2026-11-07); the failing-"other"
+    # fixture host below must be one whose 503 is NOT already accepted.
+    assert "jp.hansearch.com" in websites.KNOWN_DOWN
+    assert OTHER_FAILING_HOST not in websites.KNOWN_DOWN
+    assert websites.site_group(OTHER_FAILING_HOST) == "other"
     assert all(websites.site_group(host) in ("openecon", "other") for host in websites.HOSTS)
 
 
@@ -324,7 +331,7 @@ def run_main_with_website_rows(tmp_path, monkeypatch, failing_host, child_exit=N
     return monitor.main(), target
 
 
-@pytest.mark.parametrize("host", ["jp.hansearch.com", "luhan.io", "api.hansearch.com"])
+@pytest.mark.parametrize("host", [OTHER_FAILING_HOST, "luhan.io", "api.hansearch.com"])
 def test_failing_non_openecon_host_exits_zero_as_degraded_other(tmp_path, monkeypatch, capsys, host):
     exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, host)
     assert exit_code == 0
@@ -351,12 +358,12 @@ def test_failing_non_openecon_host_exits_zero_as_degraded_other(tmp_path, monkey
 
 @pytest.mark.parametrize("host", OPENECON_HOSTS)
 def test_failing_openecon_host_exits_one_even_with_other_failures(tmp_path, monkeypatch, host):
-    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, (host, "jp.hansearch.com"))
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, (host, OTHER_FAILING_HOST))
     assert exit_code == 1
     report = json.loads(target.read_text())
     assert report["status"] == "FAILED"
     assert report["failed_checks"] == ["websites"]
-    assert {label.split(":")[0] for label in report["other_failed_checks"]} == {"jp.hansearch.com"}
+    assert {label.split(":")[0] for label in report["other_failed_checks"]} == {OTHER_FAILING_HOST}
     saved = monitor.saved_status(target)
     assert saved["status"] == "FAILED"
     fatal = saved["failure_details"]["websites"]
@@ -364,17 +371,17 @@ def test_failing_openecon_host_exits_one_even_with_other_failures(tmp_path, monk
     assert all(label.startswith(host + ":") for label in fatal["failed_checks"])
     assert {probe["host"] for probe in fatal["failed_probe_details"]} == {host}
     other = saved["other_failure_details"]["websites"]
-    assert {probe["host"] for probe in other["failed_probe_details"]} == {"jp.hansearch.com"}
+    assert {probe["host"] for probe in other["failed_probe_details"]} == {OTHER_FAILING_HOST}
 
 
 def test_child_exit_contradicting_rows_fails_closed(tmp_path, monkeypatch):
-    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, "jp.hansearch.com", child_exit=0)
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, OTHER_FAILING_HOST, child_exit=0)
     assert exit_code == 1
     assert json.loads(target.read_text())["checks"]["websites"]["reason"] == "website_probe_failed"
 
 
 def test_saved_degraded_other_with_contradictory_other_list_is_invalid(tmp_path, monkeypatch):
-    _, target = run_main_with_website_rows(tmp_path, monkeypatch, "jp.hansearch.com")
+    _, target = run_main_with_website_rows(tmp_path, monkeypatch, OTHER_FAILING_HOST)
     report = json.loads(target.read_text())
     report["other_failed_checks"] = []
     target.write_text(json.dumps(report))
