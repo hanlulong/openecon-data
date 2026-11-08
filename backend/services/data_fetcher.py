@@ -1035,17 +1035,33 @@ def _fred_discovery_snapshot_pick(params: dict[str, Any]) -> Any:
     return snapshot.get("indicator") if isinstance(snapshot, dict) else None
 
 
+def _fred_pick_is_users_choice(params: dict[str, Any]) -> bool:
+    """The ``indicator`` is the series the USER picked from offered options.
+
+    Structural authority stamp written by every clarification-choice path
+    (indicator_clarification.try_resolve_pending_indicator_choice,
+    query_helpers.build_intent_from_semantic_clarification) and preserved by
+    resolution for a code-shaped choice.  A user's explicit choice is final:
+    no search may replace it (the fetched series must still pass the
+    result-level country validation).
+    """
+    return str(params.get("__decision_source") or "").strip() == "user_choice"
+
+
 def _fred_discovery_search_is_current(params: dict[str, Any]) -> bool:
     """Whether dispatch should search FRED with ``__fred_discovery_query``.
 
     Only while ``indicator`` is still the pick the search text was derived
-    for.  Once a later stage re-picks ``indicator`` the re-pick is fetched
-    as-is and must pass the result-level country validation; a stale search
-    text must never silently replace it.
+    for, and never for a pick the user chose explicitly.  Once a later stage
+    re-picks ``indicator`` the re-pick is fetched as-is and must pass the
+    result-level country validation; a stale search text must never silently
+    replace it.
     """
     if not params.get("__fred_country_scope_discovery"):
         return False
     if not str(params.get("__fred_discovery_query") or "").strip():
+        return False
+    if _fred_pick_is_users_choice(params):
         return False
     return _same_fred_pick(params.get("indicator"), _fred_discovery_snapshot_pick(params))
 
@@ -1230,7 +1246,19 @@ def _prepare_fred_country_scope_params(
             if _same_fred_pick(params.get("indicator"), decided_pick):
                 return params
             raw_country, iso2 = non_us_scope[0]
-            if _same_fred_pick(
+            # A deliberate re-pick needs no "same request?" text comparison:
+            # * the user's explicit menu choice -- the choice path itself sets
+            #   isFollowUp, which flips how the search text is rebuilt, so a
+            #   first-turn base with extra words ("... last 5 years", Chinese)
+            #   would otherwise read as a changed request and be re-searched;
+            # * a legacy pending intent persisted before the scoped keys
+            #   existed (flag set, no recorded search text): main fetched its
+            #   incoming indicator as-is, and there is no text to compare.
+            deliberate_repick = (
+                _fred_pick_is_users_choice(params)
+                or not str(params.get("__fred_discovery_query") or "").strip()
+            )
+            if deliberate_repick or _same_fred_pick(
                 _fred_country_context_query(params, intent, raw_country, iso2),
                 params.get("__fred_discovery_query"),
             ):

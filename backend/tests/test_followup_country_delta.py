@@ -619,6 +619,129 @@ class FredDiscoveryRepickTests(unittest.TestCase):
         self.assertIsInstance(result, DataNotAvailableError)
         self.assertEqual([call.get("indicator") for call in calls], [chosen])
 
+    # -- a user's explicit choice after a FIRST-TURN discovery ---------------
+    # The choice path (try_resolve_pending_indicator_choice) sets isFollowUp,
+    # which flips how the search text is rebuilt, so a "same request?" text
+    # comparison misread any first-turn base that is not exactly
+    # "<Country> <label>" as a changed request and re-searched.
+
+    _FIRST_TURN_BASES = (
+        "Canada unemployment rate last 5 years from FRED",
+        "加拿大失业率 FRED",
+        "show me the unemployment rate for Canada since 2019 please",
+    )
+
+    def _first_turn_pending_params(self, original_query: str) -> dict[str, Any]:
+        intent = ParsedIntent(
+            apiProvider="FRED", indicators=["unemployment rate"], clarificationNeeded=False,
+            parameters={
+                "country": "CA", "indicator": "UNRATE", "__semantic_indicator_label": "unemployment rate",
+                "__semantic_authority": "llm_adjudication", "__decision_source": "llm_pick",
+            },
+            originalQuery=original_query,
+        )
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+        self.assertTrue(data_fetcher._fred_discovery_search_is_current(prepared))  # pylint: disable=protected-access
+        return prepared
+
+    def _apply_choice(self, pending_params: dict[str, Any], original_query: str, chosen: str) -> ParsedIntent:
+        # Mirrors try_resolve_pending_indicator_choice's intent rewrite.
+        params = dict(pending_params)
+        for key in ("seriesId", "series_id", "code"):
+            params.pop(key, None)
+        params.update(indicator=chosen, __semantic_authority="exact_user_input", __decision_source="user_choice")
+        return ParsedIntent(
+            apiProvider="FRED", indicators=[chosen], clarificationNeeded=False, parameters=params,
+            originalQuery=original_query, resolvedQuery=original_query,
+            isFollowUp=True, followUpType="clarification_answer",
+        )
+
+    # Realistic FRED code shapes: these tests run the REAL resolution, which
+    # keeps a user's choice only when it is code-shaped.
+    _CHOSEN_CA = "LRUNTTTTCAM156S"
+
+    def _fetch_choice(self, intent: ParsedIntent) -> tuple[list[dict[str, Any]], Any]:
+        calls: list[dict[str, Any]] = []
+
+        def _fetch(params: dict[str, Any]) -> NormalizedData:
+            calls.append(dict(params))
+            if params.get("indicator") == self._CHOSEN_CA:
+                return _series(indicator="Unemployment rate for Canada", country="Canada", series_id=self._CHOSEN_CA)
+            return _series(indicator="Unemployment Rate", country="US", series_id="US_SERIES")
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", side_effect=_fetch), \
+             patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            try:
+                result: Any = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            except DataNotAvailableError as exc:
+                result = exc
+        return calls, result
+
+    def test_choice_after_first_turn_discovery_is_fetched_for_any_base_wording(self) -> None:
+        # Real resolution (not a passthrough stub): it must keep the choice's
+        # user_choice stamp, and the prep must then fetch the chosen code.
+        for original_query in self._FIRST_TURN_BASES:
+            with self.subTest(original_query=original_query):
+                cache_service.clear()
+                pending = self._first_turn_pending_params(original_query)
+                intent = self._apply_choice(pending, original_query, self._CHOSEN_CA)
+                calls, data = self._fetch_choice(intent)
+                self.assertEqual([call.get("indicator") for call in calls], [self._CHOSEN_CA])
+                self.assertEqual({_normalize_known_country_to_iso2(s.metadata.country) for s in data}, {"CA"})
+                params = intent.parameters
+                self.assertEqual(params["__decision_source"], "user_choice")
+                # Bookkeeping kept: the snapshot still restores the verified
+                # request for another geography, and the cache identity is the
+                # chosen code, not the stale search text.
+                self.assertEqual(params["__fred_pre_discovery"]["indicator"], "UNRATE")
+                contract = data_fetcher._provider_request_contract("FRED", intent, params)  # pylint: disable=protected-access
+                self.assertNotIn("discovery_query", contract)
+
+    def test_choice_of_a_non_matching_series_fails_closed_and_is_never_researched(self) -> None:
+        # Choosing the demoted U.S. code itself (same as the pre-discovery
+        # pick) or another U.S. code: fetched as chosen, rejected by the
+        # result-level country validation -- never silently swapped for a
+        # search result the user did not pick.
+        for chosen in ("UNRATE", "UNRATENSA"):
+            with self.subTest(chosen=chosen):
+                cache_service.clear()
+                original_query = self._FIRST_TURN_BASES[0]
+                intent = self._apply_choice(self._first_turn_pending_params(original_query), original_query, chosen)
+                calls, result = self._fetch_choice(intent)
+                self.assertIsInstance(result, DataNotAvailableError)
+                self.assertEqual([call.get("indicator") for call in calls], [chosen])
+
+    def test_legacy_pending_intent_choice_is_fetched_not_rediscovered(self) -> None:
+        # Pending intents persisted before the scoped keys existed: discovery
+        # flag set, indicator + label rewritten to the search text, no
+        # __fred_discovery_query / __fred_pre_discovery / __fred_discovery_pick.
+        for decision_source in ("user_choice", None):
+            with self.subTest(decision_source=decision_source):
+                legacy = {
+                    "country": "CA",
+                    "indicator": "Canada unemployment rate last 5 years",
+                    "__semantic_indicator_label": "Canada unemployment rate last 5 years",
+                    "__fred_country_scope_discovery": True,
+                    "__fred_requested_country": "CA",
+                }
+                intent = self._apply_choice(legacy, "Canada unemployment rate last 5 years from FRED", self._CHOSEN_CA)
+                if decision_source is None:
+                    intent.parameters.pop("__decision_source")
+                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+                    prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+                self.assertEqual(prepared["indicator"], self._CHOSEN_CA)
+                self.assertNotIn("__fred_discovery_query", prepared)
+                self.assertFalse(data_fetcher._fred_discovery_search_is_current(prepared))  # pylint: disable=protected-access
+                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+                    self.assertIs(_prepare_fred_country_scope_params({}, prepared, intent), prepared)
+        cache_service.clear()
+        calls, data = self._fetch_choice(intent)
+        self.assertEqual([call.get("indicator") for call in calls], [self._CHOSEN_CA])
+        self.assertEqual({_normalize_known_country_to_iso2(s.metadata.country) for s in data}, {"CA"})
+
 
 class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
     """Fetch-level country switch, concept-source hygiene, multi-indicator."""
