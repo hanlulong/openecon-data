@@ -47,7 +47,13 @@ from ..services.follow_up_retrieval import (
 )
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_progress_labels
-from ..utils.retry import retry_async, DataNotAvailableError, is_provider_unavailable
+from ..utils.retry import (
+    DataNotAvailableError,
+    aggregate_failure,
+    is_provider_unavailable,
+    retry_async,
+    variant_retry_allowed,
+)
 # Explicit-time-scope detection lives in time_range_defaults (stdlib only) so
 # providers share one detector; the private names stay importable from here
 # for existing callers and tests.
@@ -2752,6 +2758,8 @@ async def fetch_from_provider_dispatch(
                 commodity=dispatched_commodity, **trade_kwargs
             )
         except DataNotAvailableError as text_error:
+            if not variant_retry_allowed(text_error):
+                raise
             retry_code = _comtrade_adjudicated_retry_code(params, dispatched_commodity, text_error)
             if not retry_code:
                 raise
@@ -3322,7 +3330,9 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             try:
                 result = await svc.statscan_provider.fetch_dynamic_data(dynamic_params)
                 return [result]
-            except DataNotAvailableError:
+            except DataNotAvailableError as exc:
+                if not variant_retry_allowed(exc):
+                    raise
                 logger.warning(f"Dynamic discovery failed for {indicator}, trying vector fetch")
                 series = await svc.statscan_provider.fetch_series(params)
                 return [series]
@@ -3530,8 +3540,12 @@ async def _fetch_from_eurostat(
             fetch_kwargs["filters"] = request_filters
         try:
             return await svc.eurostat_provider.fetch_indicator(**fetch_kwargs)
-        except DataNotAvailableError:
-            if not should_retry_sparse_history or fallback_start_year >= int(request_start_year):
+        except DataNotAvailableError as exc:
+            if (
+                not variant_retry_allowed(exc)
+                or not should_retry_sparse_history
+                or fallback_start_year >= int(request_start_year)
+            ):
                 raise
             logger.info(
                 "Eurostat sparse-history retry: indicator=%s country=%s start_year=%s -> %s",
@@ -3579,13 +3593,15 @@ async def _fetch_from_eurostat(
         logger.info(f"Multi-country Eurostat query detected: {countries_param}")
         eurostat_sem = asyncio.Semaphore(5)
 
-        async def _fetch_eurostat_country(country_code: str) -> Optional[NormalizedData]:
+        async def _fetch_eurostat_country(country_code: str) -> Any:
+            # Returns the series, or the exception (an outcome for the
+            # aggregate below: an outage must not read as "no data").
             async with eurostat_sem:
                 try:
                     return await _fetch_indicator_with_sparse_history_retry(country_code)
                 except Exception as e:
                     logger.warning(f"Failed to fetch {indicator} for {country_code}: {e}")
-                    return None
+                    return e
 
         eurostat_results = await asyncio.gather(
             *[_fetch_eurostat_country(c) for c in countries_param],
@@ -3597,7 +3613,13 @@ async def _fetch_from_eurostat(
         ]
 
         if not series_list:
-            raise DataNotAvailableError(f"No Eurostat data available for {indicator} in any requested countries")
+            raise aggregate_failure(
+                eurostat_results,
+                DataNotAvailableError(
+                    f"No Eurostat data available for {indicator} in any requested countries"
+                ),
+                context=f"Eurostat {indicator}",
+            )
 
         return series_list
 
@@ -4320,6 +4342,10 @@ async def fetch_data(
         except DataNotAvailableError as exc:
             if "no_data_in_requested_window" in str(exc):
                 raise
+            if not variant_retry_allowed(exc):
+                # No verdict: an unwindowed probe or a broadened retry asks
+                # the same unanswering provider again and proves nothing.
+                raise
             recovered = await _probe_user_time_window()
             if recovered:
                 return recovered
@@ -4674,8 +4700,14 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
             unserved.append({"indicator": indicator_name, "reason": "no_data"})
 
     if not all_data:
-        raise DataNotAvailableError(
-            f"Could not fetch any of the requested indicators: {', '.join(intent.indicators)}"
+        # Every leg unanswered (outage / timeout sentinel) -> a typed
+        # no-verdict; any leg that answered keeps the plain verdict.
+        raise aggregate_failure(
+            results,
+            DataNotAvailableError(
+                f"Could not fetch any of the requested indicators: {', '.join(intent.indicators)}"
+            ),
+            context="Could not fetch any of the requested indicators",
         )
 
     # Partial success: at least one indicator resolved but others did not.

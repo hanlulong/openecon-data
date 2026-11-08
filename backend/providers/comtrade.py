@@ -24,7 +24,14 @@ from .comtrade_metadata import (
 # Previously imported: EU27_COUNTRY_CODES, REGION_EXPANSIONS, G7_COUNTRY_CODES,
 # BRICS_COUNTRY_CODES, ASEAN_COUNTRY_CODES, NORDIC_COUNTRY_CODES
 from .base import BaseProvider
-from ..utils.retry import ProviderCoolingDown, ProviderUnavailable
+from ..utils.request_budget import io_remaining
+from ..utils.retry import (
+    ProviderCoolingDown,
+    ProviderUnavailable,
+    RequestBudgetExhausted,
+    parse_retry_after,
+    variant_retry_allowed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +87,9 @@ for _alias, _ccode in COUNTRY_CODE_MAPPINGS.items():
 # Retry configuration.  Transport-level retry (5xx/timeouts/connection errors)
 # is handled by BaseProvider._get_with_retry (tenacity, 3 attempts, exponential
 # backoff).  A 429 is never retried: it opens the shared provider cooldown and
-# raises ProviderCoolingDown, which also stops the reporter/partner/period
-# fan-out in fetch_trade_data at the first occurrence;
+# raises ProviderCoolingDown. Any no-verdict failure (ProviderUnavailable,
+# cooldowns included) stops the reporter/partner/period fan-out in
+# fetch_trade_data at the first occurrence;
 # MAX_RETRIES/RETRY_DELAY_BASE here govern the application-level retry for
 # empty TOTAL payloads and keep the wall-clock budget math below conservative.
 # Worst-case latency = MAX_RETRIES * REQUEST_TIMEOUT + sum(backoff delays).
@@ -851,7 +859,13 @@ class ComtradeProvider(BaseProvider):
                     if response_text:
                         detail += f"; provider_message={response_text}"
                     logger.warning(detail)
-                    raise DataNotAvailableError(detail)
+                    # A quota refusal is no verdict about the data: typed as a
+                    # cooldown so the fan-out stops and nothing reads it as
+                    # "no records".
+                    raise ProviderCoolingDown(
+                        detail,
+                        retry_after_seconds=parse_retry_after(retry_after) if retry_after else None,
+                    )
                 logger.error(
                     f"Comtrade API error for reporter {reporter_raw}: "
                     f"HTTP {status_code}"
@@ -1336,11 +1350,13 @@ class ComtradeProvider(BaseProvider):
         # protects the shared subscription key from cross-session 429 bursts.
         max_concurrent_requests = 2 if freq_code == "A" else 3
         semaphore = asyncio.Semaphore(max_concurrent_requests)
-        # First ProviderCoolingDown of this fetch. Once Comtrade (or our shared
-        # limiter) is cooling down, every remaining sub-request would only be
-        # refused locally after waiting out the request spacing, so the rest of
-        # the fan-out — and the fallback envelopes below — are skipped.
-        cooling_down: Optional[ProviderCoolingDown] = None
+        # First no-verdict failure (ProviderUnavailable: cooldown, exhausted
+        # 5xx/timeout retries, open breaker, request deadline) of this fetch.
+        # Sub-requests are serialized behind one global gate, so each remaining
+        # one would only spend another full retry cycle against a provider that
+        # is not answering (or be refused locally during a cooldown); the rest
+        # of the fan-out -- and the fallback envelopes below -- are skipped.
+        provider_stop: Optional[ProviderUnavailable] = None
 
         async def _guarded_fetch(
             reporter_raw: str,
@@ -1348,10 +1364,10 @@ class ComtradeProvider(BaseProvider):
             period_param: str,
             flow_code_arg: str = flow_code,
         ) -> List[NormalizedData]:
-            nonlocal cooling_down
+            nonlocal provider_stop
             async with semaphore:
                 async with _global_request_semaphore():
-                    if cooling_down is not None:
+                    if provider_stop is not None:
                         return []
                     await _respect_global_request_spacing()
                     try:
@@ -1364,17 +1380,17 @@ class ComtradeProvider(BaseProvider):
                             period_param,
                             freq_code,
                         )
-                    except ProviderCoolingDown as exc:
-                        if cooling_down is None:
-                            cooling_down = exc
+                    except ProviderUnavailable as exc:
+                        if provider_stop is None:
+                            provider_stop = exc
                         raise
 
         async def _run_fetch_for_chunks(
             chunks: List[str],
             flow_code_arg: str,
         ) -> Tuple[List[NormalizedData], Optional[BaseException]]:
-            if cooling_down is not None:
-                return [], cooling_down
+            if provider_stop is not None:
+                return [], provider_stop
             tasks = [
                 _guarded_fetch(reporter_raw, partner_code, period_param, flow_code_arg)
                 for reporter_raw in reporter_list
@@ -1391,6 +1407,11 @@ class ComtradeProvider(BaseProvider):
             # timeouts are surfaced as false data-not-available results before
             # the provider retry policy completes.
             overall_budget = _comtrade_overall_time_budget(len(tasks))
+            # The request deadline may only shorten the fetch budget.
+            cap = io_remaining()
+            budget_bound = cap is not None and cap < overall_budget
+            if budget_bound:
+                overall_budget = max(0.1, cap)
             try:
                 results_list = await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
@@ -1399,11 +1420,16 @@ class ComtradeProvider(BaseProvider):
             except asyncio.TimeoutError:
                 logger.warning(
                     "Comtrade overall time budget (%.0fs) exceeded for %d tasks; "
-                    "returning partial results",
+                    "no sub-request answered in time",
                     overall_budget,
                     len(tasks),
                 )
-                return [], None
+                # Unanswered sub-requests are no verdict, never "no records".
+                error_cls = RequestBudgetExhausted if budget_bound else ProviderUnavailable
+                return [], error_cls(
+                    f"UN Comtrade did not answer {len(tasks)} sub-request(s) within the "
+                    f"{overall_budget:.0f}s fetch budget"
+                )
 
             flattened: List[NormalizedData] = []
             newest_error: Optional[BaseException] = None
@@ -1413,13 +1439,18 @@ class ComtradeProvider(BaseProvider):
                     newest_error = result
                     continue
                 flattened.extend(result)
-            return flattened, cooling_down or newest_error
+            return flattened, provider_stop or newest_error
 
         all_results, last_error = await _run_fetch_for_chunks(period_chunks, flow_code)
 
         async def _retry_both_flow_envelope(chunks: List[str]) -> None:
             nonlocal all_results, last_error
-            if all_results or flow_code not in {"X", "M"} or cooling_down is not None:
+            if (
+                all_results
+                or flow_code not in {"X", "M"}
+                or provider_stop is not None
+                or not variant_retry_allowed(last_error)
+            ):
                 return
             # UN Comtrade's v1 endpoint can return an empty payload for a
             # narrow flow-specific world-total request while the equivalent
@@ -1445,7 +1476,8 @@ class ComtradeProvider(BaseProvider):
 
         if (
             not all_results
-            and cooling_down is None
+            and provider_stop is None
+            and variant_retry_allowed(last_error)
             and implicit_default_period
             and freq_code == "A"
             and commodity_code != "TOTAL"
@@ -1505,7 +1537,7 @@ class ComtradeProvider(BaseProvider):
         merged_results = self._merge_series_segments(all_results)
         # A sub-request that raised (429 / cooldown / timeout / 5xx) leaves its
         # periods unanswered; absent rows then prove nothing about filing.
-        fetch_complete = last_error is None and cooling_down is None
+        fetch_complete = last_error is None and provider_stop is None
         self._disclose_unreported_trailing_years(
             merged_results, start, end, freq_code, fetch_complete=fetch_complete
         )

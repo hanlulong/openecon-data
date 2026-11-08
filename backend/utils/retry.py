@@ -6,7 +6,7 @@ import logging
 import random
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Callable, TypeVar, Any
+from typing import Callable, Iterable, Optional, TypeVar, Any
 from functools import wraps
 
 import httpx
@@ -84,6 +84,71 @@ class RequestBudgetExhausted(ProviderUnavailable):
     a claim that the provider is down. ``with_context`` is inherited and
     keeps this class.
     """
+
+
+def is_no_verdict(exc: BaseException | None) -> bool:
+    """True when ``exc`` says nothing about whether the requested data exists.
+
+    Typed only: a ProviderUnavailable (and subclasses), or a raw transport /
+    timeout exception that escaped provider wrapping. ``is_provider_unavailable``
+    stays the narrower typed-provider check (a bare TimeoutError is not a
+    provider verdict either way, but it is not a ProviderUnavailable).
+    """
+    return is_provider_unavailable(exc) or isinstance(
+        exc, (httpx.TransportError, asyncio.TimeoutError)
+    )
+
+
+def variant_retry_allowed(last_error: BaseException | None) -> bool:
+    """The single gate for every same-provider VARIANT re-probe.
+
+    A variant re-probe exists to recover from a VERDICT (empty payload, 4xx,
+    no rows): the alternate-code re-adjudication, the unwindowed window probe
+    and broadened-window retry, the Comtrade M,X flow envelope and historical
+    window, the Eurostat sparse-history retry, StatsCan dynamic->vector, the
+    Comtrade adjudicated-HS retry, semantic recovery after a fetch error, and
+    the World Bank fallback ladder. A no-verdict says nothing about the
+    series, so the re-probe cannot help and only burns the request deadline
+    against a provider that is not answering. ``None`` (a clean empty) and a
+    plain DataNotAvailableError keep every existing re-probe.
+    """
+    return not is_no_verdict(last_error)
+
+
+def aggregate_failure(
+    outcomes: Iterable[Any],
+    verdict: Optional[BaseException],
+    *,
+    context: str,
+) -> Optional[BaseException]:
+    """Combine one outcome per sub-request into the error a fan-out raises.
+
+    ``outcomes``: an exception is a failed sub-request; anything else (None,
+    data, ``[]``, a NormalizedData) means the provider ANSWERED it. When there
+    is at least one outcome and EVERY one is a no-verdict, the provider never
+    answered, so a typed no-verdict is returned instead of ``verdict``: the
+    first ProviderCoolingDown (context-prefixed), else the first
+    ProviderUnavailable (context-prefixed), else a ProviderUnavailable wrapping
+    the first raw transport/timeout error. Otherwise ``verdict`` (possibly
+    None) is returned unchanged.
+
+    Deliberately conservative: mixed outcomes keep today's plain verdict.
+    """
+    items = list(outcomes)
+    if not items or not all(
+        isinstance(item, BaseException) and is_no_verdict(item) for item in items
+    ):
+        return verdict
+    for item in items:
+        if isinstance(item, ProviderCoolingDown):
+            return item.with_context(context)
+    for item in items:
+        if isinstance(item, ProviderUnavailable):
+            return item.with_context(context)
+    raw = items[0]
+    wrapped = ProviderUnavailable(f"{context}: {type(raw).__name__}: {raw}")
+    wrapped.__cause__ = raw
+    return wrapped
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:

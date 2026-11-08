@@ -16,7 +16,7 @@ import httpx
 from ..config import get_settings
 from ..services.http_pool import get_http_client, get_http1_client, effective_timeout
 from ..models import Metadata, NormalizedData
-from ..utils.retry import DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, ProviderUnavailable
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -2246,6 +2246,11 @@ class IMFProvider(BaseProvider):
                     start_year=start_year,
                     end_year=end_year,
                 )
+            except ProviderUnavailable as exc:
+                # No verdict: keep the type (never "returned no observations").
+                raise exc.with_context(
+                    f"IMF BOP public SDMX request for {indicator_code} did not complete"
+                ) from exc
             except DataNotAvailableError as exc:
                 raise DataNotAvailableError(
                     f"IMF BOP public SDMX returned no observations for exact candidates derived from {indicator_code}: {exc}. "

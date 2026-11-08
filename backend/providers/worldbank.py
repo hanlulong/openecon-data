@@ -12,7 +12,7 @@ import httpx
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
 from ..utils.catalog_metadata_signals import catalog_row_is_vintage_archive
-from ..utils.retry import DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, aggregate_failure
 from ..services.http_pool import get_http1_client, effective_timeout
 from .base import BaseProvider
 
@@ -1272,6 +1272,12 @@ class WorldBankProvider(BaseProvider):
         batch_response = None  # Track response for metadata (e.g. Date header)
         api_error_detail = None
         transport_failure_seen = False
+        # One entry per World Bank request of THIS fetch: None when the API
+        # answered (any status it returned), the exception when it did not.
+        # When nothing answered, the fetch raises a typed no-verdict instead
+        # of running the verdict ladder (source endpoint, income aggregates,
+        # alternative indicators) against a provider that is not answering.
+        wb_outcomes: list = []
         if prefer_parallel_small_group:
             logger.info(
                 "WorldBank: skipping batched multi-country request for small group (%d countries); "
@@ -1293,6 +1299,7 @@ class WorldBankProvider(BaseProvider):
                     raise_on_status=False,
                     timeout=effective_timeout(25.0),
                 )
+                wb_outcomes.append(None)
                 logger.info(f"WorldBank API response: status={batch_response.status_code}")
                 if batch_response.status_code >= 400:
                     # Non-2xx after the helper exhausted its transient retries —
@@ -1380,10 +1387,12 @@ class WorldBankProvider(BaseProvider):
                 # so per-country / cross-provider fallbacks run.
                 logger.warning(f"WorldBank batch request unavailable for {batch_codes}: {e}")
                 transport_failure_seen = True
+                wb_outcomes.append(e)
                 payload = None
             except httpx.HTTPError as e:
                 logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
                 transport_failure_seen = True
+                wb_outcomes.append(e)
                 payload = None
             except Exception as e:
                 logger.warning(f"Error fetching batched data: {e}")
@@ -1440,10 +1449,12 @@ class WorldBankProvider(BaseProvider):
                         country_code = self._country_code(country_code_raw)
                         single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
                         response = await self._get_with_retry(client, single_url, params=params, headers=headers, timeout=effective_timeout(15.0))
+                        wb_outcomes.append(None)
                         single_payload = response.json()
                         if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
                             return single_payload
                     except Exception as e:
+                        wb_outcomes.append(e)
                         logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
                     return None
 
@@ -1462,7 +1473,8 @@ class WorldBankProvider(BaseProvider):
                             fallback_meta = fr[0]
                 if accumulated_records and fallback_meta:
                     payload = [fallback_meta, accumulated_records]
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
+                wb_outcomes.append(exc)
                 logger.warning(
                     "WorldBank per-country fallback timed out after %.1fs",
                     _time.perf_counter() - _fetch_start,
@@ -1508,6 +1520,7 @@ class WorldBankProvider(BaseProvider):
                     headers=headers,
                     timeout=effective_timeout(15.0),
                 )
+                wb_outcomes.append(None)
                 world_payload = world_response.json()
                 if (
                     isinstance(world_payload, list)
@@ -1517,6 +1530,7 @@ class WorldBankProvider(BaseProvider):
                     payload = world_payload
                     batch_response = world_response
             except Exception as exc:
+                wb_outcomes.append(exc)
                 logger.debug(
                     "WorldBank World aggregate retry failed for exact no-country %s: %s",
                     indic,
@@ -1638,6 +1652,14 @@ class WorldBankProvider(BaseProvider):
         # the shared circuit breaker inside _get_with_retry.
         if results:
             return results
+
+        # No World Bank request of this fetch got an answer: a typed
+        # no-verdict, never "No data found" (mixed outcomes keep the ladder).
+        outage = aggregate_failure(
+            wb_outcomes, None, context=f"World Bank did not answer for indicator {indic}"
+        )
+        if outage is not None:
+            raise outage
 
         # No results — try fallbacks in order of priority.
         _results_elapsed = _time.perf_counter() - _fetch_start

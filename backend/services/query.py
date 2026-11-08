@@ -64,7 +64,7 @@ from ..providers.chinamacro import ChinaMacroProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS
-from ..utils.retry import retry_async, DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, retry_async, variant_retry_allowed
 from ..services.http_pool import extended_timeout
 from ..services.query_decomposition import (
     generate_sub_query,
@@ -6643,6 +6643,11 @@ class QueryService:
                     # the picked series exists and simply has no observations
                     # in the window. Re-adjudicating with the code excluded
                     # can never help and burned 3 fetch+LLM rounds per query.
+                    raise
+                if not variant_retry_allowed(exc):
+                    # No verdict (outage / timeout / cooldown): the code was
+                    # never judged, so it is not excluded as dead and the
+                    # selector is not re-run against a provider not answering.
                     raise
                 params = intent.parameters or {}
                 failed_code = str(params.get("indicator") or "").strip()
