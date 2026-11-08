@@ -5815,6 +5815,21 @@ class QueryService:
                                 shortcut_intent.apiProvider,
                                 shortcut_params.get("indicator"),
                             )
+                        elif (
+                            exact_title_intent is not None
+                            and _catalog_version is not None
+                            and _query_hash
+                            and cached_params.get("__exact_indicator_title_match")
+                            and cached_intent.originalQuery == query
+                        ):
+                            # The builder re-ran on a stale/unstamped entry it
+                            # made for this very text and re-confirmed it:
+                            # stamp the entry with the snapshot token read
+                            # BEFORE this build, so later HITs skip the
+                            # builder again instead of re-running it on every
+                            # HIT until the intent TTL expires.
+                            parse_result.catalog_version = _catalog_version
+                            _put_cached_parse_result(_query_hash, parse_result)
                 else:
                     exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
                     # Read the snapshot token BEFORE the builder runs: if the

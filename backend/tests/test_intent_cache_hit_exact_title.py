@@ -129,6 +129,75 @@ class IntentCacheHitExactTitleTests(unittest.TestCase):
         builder, _response = self._run_hit(_title_shortcut_intent(_QUERY.lower()))
         builder.assert_called()
 
+    def _run_hits_against_store(self, store: dict, builder_intent, *, versions: list, hits: int = 2):
+        """Repeat HITs against a live in-test intent cache (get/put share
+        ``store``); ``versions`` yields the catalog token per read."""
+        tokens = iter(versions)
+        with patch(
+                 "backend.services.query._get_cached_parse_result",
+                 side_effect=lambda _key: store.get("entry"),
+             ), \
+             patch(
+                 "backend.services.query._put_cached_parse_result",
+                 side_effect=lambda _key, result: store.__setitem__("entry", result),
+             ), \
+             patch.object(self.service, "_build_explicit_provider_code_intent", return_value=None), \
+             patch.object(self.service, "_exact_title_catalog_version", side_effect=lambda: next(tokens)), \
+             patch.object(self.service, "_build_exact_indicator_title_intent", side_effect=builder_intent) as builder, \
+             patch.object(
+                 self.service.pipeline,
+                 "parse_and_route",
+                 new_callable=AsyncMock,
+                 side_effect=AssertionError("LLM parse should be skipped on a cache HIT"),
+             ), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()):
+            for _ in range(hits):
+                run(self.service.process_query(_QUERY))
+        return builder
+
+    def test_hit_that_reconfirms_a_stale_entry_restamps_it_so_later_hits_skip_the_builder(self) -> None:
+        store = {"entry": ParseRouteResult(
+            intent=_title_shortcut_intent(_QUERY), explicit_provider="FRED", routed_provider="FRED",
+            validation_warning=None, catalog_version="snapshot-1",
+        )}
+        # The catalog moved to snapshot-2 before the first HIT; it stays there.
+        builder = self._run_hits_against_store(
+            store, _title_shortcut_intent, versions=["snapshot-2"] * 4, hits=3,
+        )
+        self.assertEqual(builder.call_count, 1)
+        self.assertEqual(store["entry"].catalog_version, "snapshot-2")
+        self.assertEqual(store["entry"].intent.parameters["indicator"], "GDPC1")
+
+    def test_restamp_never_applies_to_an_entry_the_builder_did_not_make(self) -> None:
+        # An LLM parse that happens to agree with the builder is not the
+        # builder's answer: it is never stamped as one (every HIT re-checks).
+        llm = _llm_intent()
+        llm.parameters["__semantic_provider_locked"] = True
+        store = {"entry": ParseRouteResult(
+            intent=llm, explicit_provider="FRED", routed_provider="FRED",
+            validation_warning=None, catalog_version=None,
+        )}
+        builder = self._run_hits_against_store(store, _title_shortcut_intent, versions=["snapshot-2"] * 4)
+        self.assertEqual(builder.call_count, 2)
+        self.assertIsNone(store["entry"].catalog_version)
+
+    def test_restamp_uses_the_token_read_before_the_build(self) -> None:
+        store = {"entry": ParseRouteResult(
+            intent=_title_shortcut_intent(_QUERY), explicit_provider="FRED", routed_provider="FRED",
+            validation_warning=None, catalog_version="snapshot-1",
+        )}
+        catalog = {"version": "snapshot-2"}
+
+        def _builder(query: str) -> ParsedIntent:
+            catalog["version"] = "snapshot-3"  # catalog changes mid-build
+            return _title_shortcut_intent(query)
+
+        tokens = iter(["snapshot-2", "snapshot-3", "snapshot-3"])
+        builder = self._run_hits_against_store(store, _builder, versions=list(tokens), hits=2)
+        # Stamped "snapshot-2" (pre-build), so the snapshot-3 HIT re-checks.
+        self.assertEqual(builder.call_count, 2)
+
     def test_miss_stamps_builder_result_with_pre_build_snapshot(self) -> None:
         catalog = {"version": "snapshot-before-build"}
         stored: list[ParseRouteResult] = []
