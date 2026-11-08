@@ -24,7 +24,7 @@ from .comtrade_metadata import (
 # Previously imported: EU27_COUNTRY_CODES, REGION_EXPANSIONS, G7_COUNTRY_CODES,
 # BRICS_COUNTRY_CODES, ASEAN_COUNTRY_CODES, NORDIC_COUNTRY_CODES
 from .base import BaseProvider
-from ..utils.retry import ProviderCoolingDown
+from ..utils.retry import ProviderCoolingDown, ProviderUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -808,9 +808,11 @@ class ComtradeProvider(BaseProvider):
                     follow_redirects=False,
                     timeout=REQUEST_TIMEOUT,
                 )
-            except ProviderCoolingDown as e:
-                # Keep the type so the caller's fan-out stops at this one.
-                logger.warning(f"Comtrade cooling down for reporter {reporter_raw}: {e}")
+            except ProviderUnavailable as e:
+                # Keep the type: a cooldown stops the caller's fan-out at this
+                # one, and any no-verdict failure (5xx / transport / breaker)
+                # must not be demoted to a "no data" verdict by the re-wrap.
+                logger.warning(f"Comtrade unavailable for reporter {reporter_raw}: {e}")
                 raise e.with_context(f"Comtrade API error for reporter {reporter_raw}") from e
             except DataNotAvailableError as e:
                 logger.error(f"Comtrade API error for reporter {reporter_raw}: {e}")
@@ -1480,6 +1482,9 @@ class ComtradeProvider(BaseProvider):
             if last_error is not None:
                 if isinstance(last_error, DataNotAvailableError):
                     raise last_error
+                if isinstance(last_error, (httpx.TransportError, asyncio.TimeoutError)):
+                    # The sub-request never got an answer: no verdict.
+                    raise ProviderUnavailable(str(last_error)) from last_error
                 raise DataNotAvailableError(str(last_error)) from last_error
             # Every sub-task succeeded but Comtrade had zero rows.  Raise at
             # this outermost fetch boundary (rather than per reporter) so one
@@ -1662,8 +1667,9 @@ class ComtradeProvider(BaseProvider):
                 end_year=end_year,
                 frequency=frequency,
             )
-        except ProviderCoolingDown as exc:
-            # Imports would be refused locally too; keep the type for callers.
+        except ProviderUnavailable as exc:
+            # Keep the type for callers: a cooldown would refuse the imports
+            # call locally too, and a no-verdict outage is not a "no data".
             raise exc.with_context(
                 "Failed to fetch export data for trade balance calculation"
             ) from exc
@@ -1685,7 +1691,7 @@ class ComtradeProvider(BaseProvider):
                 end_year=end_year,
                 frequency=frequency,
             )
-        except ProviderCoolingDown as exc:
+        except ProviderUnavailable as exc:
             raise exc.with_context(
                 "Failed to fetch import data for trade balance calculation"
             ) from exc

@@ -47,7 +47,7 @@ from ..services.follow_up_retrieval import (
 )
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_progress_labels
-from ..utils.retry import retry_async, DataNotAvailableError
+from ..utils.retry import retry_async, DataNotAvailableError, is_provider_unavailable
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
 from ..routing.country_resolver import CountryResolver
@@ -100,9 +100,16 @@ def multi_indicator_partial_note(missing: str, language: Optional[str] = None) -
 
 
 def _multi_indicator_failure_reason(result: Any) -> str:
-    """Classify one per-indicator fetch outcome structurally (type, not text)."""
+    """Classify one per-indicator fetch outcome structurally (type, not text).
+
+    ``unavailable``: the provider gave no verdict (ProviderUnavailable —
+    transport failure, exhausted 5xx retries, open breaker, cooldown), so the
+    indicator is NOT reported as having no data.
+    """
     if isinstance(result, asyncio.TimeoutError):
         return "timeout"
+    if is_provider_unavailable(result):
+        return "unavailable"
     if isinstance(result, DataNotAvailableError) or not isinstance(result, Exception):
         return "no_data"
     return "error"

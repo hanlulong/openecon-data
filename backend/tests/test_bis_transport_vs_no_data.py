@@ -16,7 +16,7 @@ import pytest
 from backend.providers import base as base_module
 from backend.providers.bis import BISProvider
 from backend.tests.utils import MockAsyncResponse, run
-from backend.utils.retry import DataNotAvailableError
+from backend.utils.retry import DataNotAvailableError, is_provider_unavailable
 
 _PAYLOAD = {
     "data": {
@@ -88,6 +88,10 @@ def test_transport_failure_is_not_reported_as_no_data(monkeypatch, failure):
     assert "transport failure, not a no-data verdict" in message
     assert "BIS has no" not in message and "Try World Bank" not in message
     assert isinstance(info.value.__cause__, DataNotAvailableError)  # helper's own transport error
+    # Typed, so no consumer (no-data menu exclusion, multi-indicator reason)
+    # reads the outage as a definitive empty.
+    assert is_provider_unavailable(info.value)
+    assert is_provider_unavailable(info.value.__cause__)
 
 
 def test_timeout_text_survives_for_the_user_facing_formatter(monkeypatch):
@@ -102,6 +106,7 @@ def test_genuine_no_data_keeps_honest_no_data_error(monkeypatch, answer):
         _fetch(monkeypatch, {"US": answer}, country="US")
     assert "BIS has no" in str(info.value)
     assert "transport failure" not in str(info.value)
+    assert not is_provider_unavailable(info.value)
 
 
 def test_mixed_countries_one_unreachable_is_not_a_no_data_verdict(monkeypatch):
@@ -109,6 +114,7 @@ def test_mixed_countries_one_unreachable_is_not_a_no_data_verdict(monkeypatch):
         _fetch(monkeypatch, {"US": "404", "GB": "503"}, countries=["US", "GB"])
     assert "transport failure" in str(info.value)
     assert "GB" in str(info.value)
+    assert is_provider_unavailable(info.value)
 
 
 def test_partial_outage_still_serves_reachable_countries(monkeypatch):

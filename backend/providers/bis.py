@@ -11,7 +11,7 @@ import httpx
 from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
-from ..utils.retry import DataNotAvailableError, ProviderCoolingDown
+from ..utils.retry import DataNotAvailableError, ProviderCoolingDown, ProviderUnavailable
 from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 
@@ -1267,9 +1267,10 @@ class BISProvider(BaseProvider):
                 # At least one requested country has no verdict because BIS
                 # could not be reached: claiming "BIS has no data" would be
                 # false. Re-raise the provider helper's own transport error
-                # text (timeout / 429 / 5xx / breaker) in the DataNotAvailable
-                # class the fetch chokepoint, cross-provider fallback and
-                # stale-cache resort already handle.
+                # text (timeout / 429 / 5xx / breaker) as ProviderUnavailable:
+                # still a DataNotAvailableError for the fetch chokepoint,
+                # cross-provider fallback and stale-cache resort, and typed so
+                # no consumer reads it as a definitive empty.
                 last = unreachable[-1].transport_error
                 context = (
                     f"BIS unavailable (transport failure, not a no-data verdict) for "
@@ -1279,7 +1280,7 @@ class BISProvider(BaseProvider):
                     # Keep the cooldown class and its retry_after_seconds for
                     # cooldown-aware callers.
                     raise last.with_context(context) from last
-                raise DataNotAvailableError(f"{context}: {last}") from last
+                raise ProviderUnavailable(f"{context}: {last}") from last
             country_names = ", ".join(country_list[:3])
             if len(country_list) > 3:
                 country_names += f", ... ({len(country_list)} total)"

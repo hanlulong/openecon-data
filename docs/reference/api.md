@@ -635,7 +635,7 @@ A clarification's reply hint (in `clarificationQuestions` and `message`) repeats
 | Field | Type | Description |
 |-------|------|-------------|
 | `indicator` | string | The requested indicator that was not served |
-| `reason` | string | Failure class: `"no_data"`, `"timeout"` or `"error"` |
+| `reason` | string | Failure class: `"no_data"` (the provider answered with no data), `"unavailable"` (the provider could not be reached — a transport failure, outage or rate-limit cooldown, so this is not a no-data verdict), `"timeout"` or `"error"` |
 
 ### ProcessingStep
 

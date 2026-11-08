@@ -22,13 +22,33 @@ class DataNotAvailableError(Exception):
     pass
 
 
-class ProviderCoolingDown(DataNotAvailableError):
+class ProviderUnavailable(DataNotAvailableError):
+    """The provider gave NO verdict on the request: it could not be reached.
+
+    Raised by the shared provider request layer for exhausted 5xx retries,
+    connection/timeout/transport errors, an open availability circuit breaker
+    and a local admission refusal (plus ProviderCoolingDown below). Unlike a
+    plain DataNotAvailableError (404, empty payload, invalid request), it says
+    nothing about whether the series exists or has data, so consumers that
+    treat a failed attempt as a fetch-validated dead end (the no-data menu's
+    attempted-code exclusion, the multi-indicator failure reason) must not.
+    Subclassing DataNotAvailableError keeps every existing handler and
+    cross-provider fallback behaving unchanged.
+    """
+
+    def with_context(self, context: str) -> "ProviderUnavailable":
+        """Return a copy of the SAME class whose message is prefixed with
+        caller context (a re-wrap that must not demote it to a verdict)."""
+        return type(self)(f"{context}: {self}")
+
+
+class ProviderCoolingDown(ProviderUnavailable):
     """The provider refused (HTTP 429) or our shared limiter is in its cooldown.
 
     Every further request to the same provider would be refused locally until
     the cooldown expires, so fan-out loops should stop at the first one instead
-    of queueing more zero-HTTP refusals. Subclassing DataNotAvailableError keeps
-    every existing handler and provider fallback behaving unchanged.
+    of queueing more zero-HTTP refusals. A cooldown is a transient refusal, so
+    it is a ProviderUnavailable (and therefore still a DataNotAvailableError).
     """
 
     def __init__(self, message: str, *, retry_after_seconds: float | None = None):
@@ -40,6 +60,15 @@ class ProviderCoolingDown(DataNotAvailableError):
         return ProviderCoolingDown(
             f"{context}: {self}", retry_after_seconds=self.retry_after_seconds
         )
+
+
+def is_provider_unavailable(exc: BaseException | None) -> bool:
+    """True when ``exc`` is a no-verdict provider failure (typed, never text).
+
+    A plain DataNotAvailableError (or None, a clean empty attempt) is a
+    verdict about the request; ProviderUnavailable and its subclasses are not.
+    """
+    return isinstance(exc, ProviderUnavailable)
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:

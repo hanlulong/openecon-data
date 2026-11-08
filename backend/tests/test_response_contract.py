@@ -522,6 +522,79 @@ def test_no_data_menu_keeps_the_code_after_a_transient_failure(attempt_error):
     assert any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
 
 
+def _provider_layer_error(side_effect, *, open_breaker=False):
+    """The exception production code actually catches at query.py's
+    ``except DataNotAvailableError`` after a real BaseProvider request."""
+    from types import SimpleNamespace as _NS
+
+    import httpx
+    from tenacity import wait_none
+
+    from backend.providers import base as base_module
+    from backend.providers.base import BaseProvider, _get_breaker
+    from backend.services import rate_limiter as rates
+
+    class _P(BaseProvider):
+        @property
+        def provider_name(self):
+            return "RC_OUTAGE_TEST"
+
+        async def _fetch_data(self, **params):
+            return []
+
+    url = "https://example.invalid/bis"
+    responses = side_effect(httpx, url) if callable(side_effect) else side_effect
+    with patch.object(rates, "_global_rate_limiter", rates.GlobalRateLimiter()), \
+         patch.object(base_module, "_provider_breakers", {}), \
+         patch.object(base_module, "wait_exponential", lambda **kwargs: wait_none()):
+        if open_breaker:
+            _get_breaker("RC_OUTAGE_TEST").open()
+        client = _NS(get=AsyncMock(side_effect=responses))
+        try:
+            run(_P()._get_with_retry(client, url))
+        except DataNotAvailableError as exc:
+            return exc
+    raise AssertionError("provider request unexpectedly succeeded")
+
+
+@pytest.mark.parametrize(
+    "side_effect,open_breaker",
+    [
+        (lambda httpx, url: [httpx.Response(503, request=httpx.Request("GET", url))] * 3, False),
+        (lambda httpx, url: httpx.ConnectError("connection refused"), False),
+        (lambda httpx, url: httpx.ReadTimeout("timed out"), False),
+        (lambda httpx, url: [httpx.Response(200, request=httpx.Request("GET", url))], True),
+    ],
+    ids=["5xx_retries_exhausted", "connect_error", "timeout", "breaker_open"],
+)
+def test_no_data_menu_keeps_the_code_after_a_real_provider_outage(side_effect, open_breaker):
+    # Production outages arrive as the provider layer's typed
+    # ProviderUnavailable (a DataNotAvailableError), never TimeoutError.
+    error = _provider_layer_error(side_effect, open_breaker=open_breaker)
+    assert isinstance(error, DataNotAvailableError)
+    response = _no_data_menu(attempt_error=error)
+    assert response is not None
+    assert any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
+
+
+def test_no_data_menu_keeps_the_code_after_a_bis_transport_reraise():
+    from backend.utils.retry import ProviderUnavailable
+
+    error = ProviderUnavailable(
+        "BIS unavailable (transport failure, not a no-data verdict) for WS_TC in US: timed out"
+    )
+    response = _no_data_menu(attempt_error=error)
+    assert any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
+
+
+def test_no_data_menu_still_excludes_a_real_provider_404():
+    error = _provider_layer_error(
+        lambda httpx, url: [httpx.Response(404, request=httpx.Request("GET", url))]
+    )
+    response = _no_data_menu(attempt_error=error)
+    assert not any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
+
+
 # ---------------------------------------------------------------------------
 # (3) Partial multi-indicator disclosure
 # ---------------------------------------------------------------------------

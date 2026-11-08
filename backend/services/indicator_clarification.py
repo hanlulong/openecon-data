@@ -64,7 +64,7 @@ from ..utils.processing_steps import (
     get_processing_tracker,
     reset_processing_tracker,
 )
-from ..utils.retry import DataNotAvailableError, ProviderCoolingDown, retry_async
+from ..utils.retry import DataNotAvailableError, is_provider_unavailable, retry_async
 from .semantic_match_judge import decide_prefetch_outcome
 from .user_messages import get_message, reply_hint_language
 
@@ -4580,11 +4580,13 @@ def build_no_data_indicator_clarification(
     # nothing, or the provider said not-available / invalid request),
     # re-offering the same pair (now ranked first when its provider was named
     # explicitly) would invite the user to pick the exact failure again, so it
-    # is excluded. A transient refusal (rate-limit cooldown) or a transport
-    # error says nothing about the series, so it stays selectable.
+    # is excluded. A no-verdict failure — ProviderUnavailable (exhausted 5xx /
+    # transport retries, open breaker, admission refusal, cooldown), typed by
+    # the shared provider request layer — or any non-provider exception says
+    # nothing about the series, so it stays selectable.
     attempt_was_definitive = attempt_error is None or (
         isinstance(attempt_error, DataNotAvailableError)
-        and not isinstance(attempt_error, ProviderCoolingDown)
+        and not is_provider_unavailable(attempt_error)
     )
     attempted_key = (
         normalize_provider_name(intent.apiProvider or "") if attempt_was_definitive else "",

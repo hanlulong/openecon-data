@@ -239,7 +239,9 @@ class UnservedIndicator(BaseModel):
 
     indicator: str
     # Structural failure class from the fetch outcome (exception type / empty
-    # result), never parsed from message text: "no_data", "timeout", "error".
+    # result), never parsed from message text: "no_data" (the provider
+    # answered with nothing), "unavailable" (the provider could not be reached
+    # — no verdict), "timeout", "error".
     reason: str
 
 

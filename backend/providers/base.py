@@ -25,7 +25,12 @@ from ..services.rate_limiter import (
     record_provider_rate_limit_error,
     record_provider_success,
 )
-from ..utils.retry import DataNotAvailableError, ProviderCoolingDown, parse_retry_after
+from ..utils.retry import (
+    DataNotAvailableError,
+    ProviderCoolingDown,
+    ProviderUnavailable,
+    parse_retry_after,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +126,9 @@ async def admit_provider_request(provider_key: str) -> None:
 
     The single admission contract for every provider HTTP attempt that does not
     go through BaseProvider's retry helpers (e.g. streamed downloads). An active
-    429 cooldown raises ProviderCoolingDown; other refusals DataNotAvailableError.
+    429 cooldown raises ProviderCoolingDown; any other local refusal (the
+    limiter's wait budget ran out) raises ProviderUnavailable: no request was
+    sent, so neither is a verdict about the data.
     """
     if not provider_key:
         return
@@ -132,7 +139,7 @@ async def admit_provider_request(provider_key: str) -> None:
             raise ProviderCoolingDown(
                 str(exc), retry_after_seconds=exc.retry_after_seconds
             ) from exc
-        raise DataNotAvailableError(str(exc)) from exc
+        raise ProviderUnavailable(str(exc)) from exc
 
 
 def record_rate_limited_response(provider_key: str, response: httpx.Response) -> ProviderCoolingDown:
@@ -242,8 +249,12 @@ class BaseProvider(ABC):
             HTTP response
 
         Raises:
-            DataNotAvailableError: If all retries fail (ProviderCoolingDown,
-                a subclass, for an HTTP 429 or an active shared cooldown)
+            DataNotAvailableError: a definitive answer about the request (a
+                non-retried 4xx when raise_on_status). ProviderUnavailable (a
+                subclass) when the provider gave no verdict: exhausted 5xx /
+                transport retries, an open breaker or a local admission
+                refusal; ProviderCoolingDown (a ProviderUnavailable) for an
+                HTTP 429 or an active shared cooldown.
         """
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
         return await self._request_with_retry(
@@ -277,8 +288,8 @@ class BaseProvider(ABC):
             HTTP response
 
         Raises:
-            DataNotAvailableError: If all retries fail (ProviderCoolingDown,
-                a subclass, for an HTTP 429 or an active shared cooldown)
+            DataNotAvailableError / ProviderUnavailable / ProviderCoolingDown:
+                as for _get_with_retry.
         """
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
         return await self._request_with_retry(
@@ -364,7 +375,7 @@ class BaseProvider(ABC):
                 # did not fail. Nothing is recorded.
                 raise
             except _RetryAdmissionRefused:
-                failure = last_failure or DataNotAvailableError("retry refused by local rate limit")
+                failure = last_failure or ProviderUnavailable("retry refused by local rate limit")
             except Exception as exc:
                 failure = exc
             # One outcome for the entire retry operation, not each attempt.
@@ -372,10 +383,15 @@ class BaseProvider(ABC):
             if failure is None:
                 return response
             raise failure
+        # Verdict vs no verdict is decided HERE, by exception type, once for
+        # every provider: a 4xx (429 aside) is the provider answering about
+        # this request (DataNotAvailableError); everything else below means
+        # it never answered (ProviderUnavailable), so no consumer may read it
+        # as "this series has no data".
         except DataNotAvailableError:
             raise
         except pybreaker.CircuitBreakerError:
-            raise DataNotAvailableError(
+            raise ProviderUnavailable(
                 f"{self.provider_name} circuit breaker OPEN — provider is down, skipping (resets in 60s)"
             )
         except httpx.HTTPStatusError as exc:
@@ -385,10 +401,14 @@ class BaseProvider(ABC):
             raise DataNotAvailableError(str(exc)) from exc
         except _TransientHTTPError as exc:
             detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
-            raise DataNotAvailableError(f"Failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+            raise ProviderUnavailable(f"Failed after {attempts} HTTP attempts{detail}: {exc}") from exc
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             detail = "; further retries blocked by local rate limit" if retry_refused else "; retries exhausted"
-            raise DataNotAvailableError(f"Connection failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+            raise ProviderUnavailable(f"Connection failed after {attempts} HTTP attempts{detail}: {exc}") from exc
+        except httpx.TransportError as exc:
+            # Read/write/protocol errors (server dropped the connection, ...):
+            # not retried by tenacity, but equally no answer from the provider.
+            raise ProviderUnavailable(f"Request failed: {exc}") from exc
         except Exception as exc:
             raise DataNotAvailableError(f"Request failed: {exc}") from exc
 
