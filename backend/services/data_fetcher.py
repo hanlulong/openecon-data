@@ -1592,14 +1592,22 @@ def _window_bound(value: Any, *, is_end: bool) -> Optional[date]:
     not ISO ("2020-Q1", "2020/01/01") or whose month is out of range still
     yields its year's Jan-1 / Dec-31, and an out-of-range day ("2026-02-30")
     is clamped to the month's last day — so one malformed bound can never
-    silently drop that side of the window. None only when no leading year.
+    silently drop that side of the window. A compact ``YYYYMMDD`` bound is
+    the same date as its ISO form; any other leading 4-digit run is read at
+    year level, exactly like the year-level ``_year()`` gate in
+    _enforce_user_time_window. None when there is no usable leading year
+    (none at all, or year 0 -- which ``_year()`` also treats as absent --
+    or any value ``date()`` cannot represent): never raises.
     """
     text = str(value if value is not None else "").strip()
     if not text:
         return None
-    year_bound = None
-    if len(text) >= 4 and text[:4].isdigit() and (len(text) == 4 or not text[4].isdigit()):
-        year_bound = date(int(text[:4]), 12, 31) if is_end else date(int(text[:4]), 1, 1)
+    if not (len(text) >= 4 and text[:4].isdigit() and int(text[:4]) >= 1):
+        return None
+    year_bound = date(int(text[:4]), 12, 31) if is_end else date(int(text[:4]), 1, 1)
+    compact = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", text)
+    if compact:
+        text = "-".join(compact.groups())
     match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?(?:[Tt ].*)?", text)
     if not match:
         return year_bound
@@ -1612,7 +1620,10 @@ def _window_bound(value: Any, *, is_end: bool) -> Optional[date]:
         day = min(max(int(match.group(3)), 1), last_day)
     else:
         day = last_day if is_end else 1
-    return date(year, month, day)
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return year_bound
 
 
 def _requested_window(params: dict[str, Any]) -> tuple[Optional[date], Optional[date]]:

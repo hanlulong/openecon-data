@@ -656,12 +656,43 @@ def test_follow_up_unknown_bare_code_yields_no_search_text(monkeypatch):
         ("2020-Q1", "2021-12-31", [("2018-06-01", 1.0), ("2020-02-01", 2.0)], ["2020-02-01"]),
         # Out-of-range day on the END bound.
         ("2026-01-01", "2026-02-29", [("2026-02-01", 1.0), ("2026-03-01", 2.0)], ["2026-02-01"]),
+        # Compact YYYYMMDD bounds: the same dates as their ISO forms, never
+        # dropped (the year-level _year() gate already read them as 2020/2021).
+        ("20200101", "2021-12-31", [("2018-06-01", 1.0), ("2020-02-01", 2.0)], ["2020-02-01"]),
+        ("2020-01-01", "20210630", [("2021-06-01", 1.0), ("2021-09-01", 2.0)], ["2021-06-01"]),
+        # Year 0 is no bound on either gate (never a ValueError): the END
+        # bound is still enforced.
+        ("0000-01-01", "2021-12-31", [("2018-06-01", 1.0), ("2022-02-01", 2.0)], ["2018-06-01"]),
     ],
 )
 def test_malformed_window_bound_never_drops_its_side(start, end, points, expected):
     series = _series(points, frequency="Monthly")
     out = data_fetcher._enforce_user_time_window(_user_window(start, end), "", [series])
     assert [p.date for p in out[0].data] == expected
+
+
+@pytest.mark.parametrize(
+    "value, is_end, expected",
+    [
+        ("0000", False, None),
+        ("0000-01-01", True, None),
+        ("20200101", False, "2020-01-01"),
+        ("20201231", True, "2020-12-31"),
+        ("20200230", True, "2020-02-29"),   # clamped like the ISO form
+        ("20201399", False, "2020-01-01"),  # month out of range -> year level
+        ("202001", True, "2020-12-31"),     # other digit runs -> year level, as _year()
+        ("2020Q1", False, "2020-01-01"),
+        (2021, True, "2021-12-31"),
+        ("Q1-2020", False, None),
+        ("", False, None),
+    ],
+)
+def test_window_bound_parses_every_shape_without_raising(value, is_end, expected):
+    bound = data_fetcher._window_bound(value, is_end=is_end)
+    assert (bound.isoformat() if bound else None) == expected
+    # _requested_window (shared by the honesty filter and the window probe)
+    # never raises on any of these shapes either.
+    data_fetcher._requested_window({"startDate": value, "endDate": value})
 
 
 def _collective_service(monkeypatch, fetch_reply):
