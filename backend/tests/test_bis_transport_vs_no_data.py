@@ -41,6 +41,41 @@ def _isolated_breaker():
     base_module._provider_breakers.pop("BIS", None)
 
 
+def _payload(period_ids):
+    """A one-series monthly BIS payload whose observations are ``period_ids``."""
+    return {
+        "data": {
+            "dataSets": [{"series": {"0:0": {"observations": {
+                str(idx): [str(5.0 + idx / 10)] for idx in range(len(period_ids))
+            }}}}],
+            "structure": {
+                "dimensions": {
+                    "series": [
+                        {"id": "FREQ", "values": [{"id": "M", "name": "Monthly"}]},
+                        {"id": "REF_AREA", "values": [{"id": "US", "name": "United States"}]},
+                    ],
+                    "observation": [{"id": "TIME_PERIOD", "values": [{"id": p} for p in period_ids]}],
+                }
+            },
+        }
+    }
+
+
+def _recent_months(count=3):
+    """Monthly period ids ending last month (a current monthly series)."""
+    from datetime import date
+
+    today = date.today()
+    year, month = today.year, today.month
+    out = []
+    for _ in range(count):
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+        out.append(f"{year}-{month:02d}")
+    return list(reversed(out))
+
+
 class _Client:
     """Route each REF_AREA (last key segment) to a scripted behaviour."""
 
@@ -64,6 +99,10 @@ class _Client:
             return MockAsyncResponse({"data": {"dataSets": []}})
         if action == "garbled":
             return MockAsyncResponse({"data": {"dataSets": [{"series": {"0": {}}}], "structure": {}}})
+        if action == "current":
+            return MockAsyncResponse(_payload(_recent_months()))
+        if isinstance(action, tuple) and action[0] == "periods":
+            return MockAsyncResponse(_payload(list(action[1])))
         return MockAsyncResponse(_PAYLOAD)
 
 
@@ -163,4 +202,31 @@ def test_served_candidate_discloses_an_unreachable_fresher_candidate(monkeypatch
 
 def test_all_candidates_answering_adds_no_reachability_note(monkeypatch):
     series, _client = _fetch(monkeypatch, {"DE": "ok", "XM": "ok"}, country="DE")
+    assert not any("could not be reached" in note for note in (series[0].metadata.notes or []))
+
+
+def test_current_served_candidate_gets_no_reachability_note(monkeypatch):
+    # The served national/aggregate series is already current (last month):
+    # no unreached sibling can be fresher, so "may not show the latest
+    # available data" would be a false disclosure.
+    series, client = _fetch(monkeypatch, {"DE": "current", "XM": "timeout"}, country="DE")
+    assert "XM" in client.calls
+    assert not any("could not be reached" in note for note in (series[0].metadata.notes or []))
+
+
+def test_stale_served_candidate_inside_a_past_window_is_still_disclosed(monkeypatch):
+    # A national key that stopped in 1998 vs a 1990-2024 window: stale for
+    # the request, and the unreached aggregate could have served later years.
+    series, _client = _fetch(
+        monkeypatch, {"DE": ("periods", ("1998-11", "1998-12")), "XM": "503"},
+        country="DE", start_year=1990, end_year=2024,
+    )
+    assert any("could not be reached for candidate series XM" in note for note in series[0].metadata.notes or [])
+
+
+def test_candidate_reaching_the_end_of_a_past_window_is_current(monkeypatch):
+    series, _client = _fetch(
+        monkeypatch, {"DE": ("periods", ("2024-11", "2024-12")), "XM": "timeout"},
+        country="DE", start_year=2020, end_year=2024,
+    )
     assert not any("could not be reached" in note for note in (series[0].metadata.notes or []))

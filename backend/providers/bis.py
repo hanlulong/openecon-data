@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError, ProviderCoolingDown, ProviderUnavailable
+from ..utils.observation_periods import latest_period_is_stale
 from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 
@@ -945,6 +947,17 @@ class BISProvider(BaseProvider):
         # Concurrency limiter: allow up to 5 parallel requests to BIS
         semaphore = asyncio.Semaphore(5)
 
+        # Reference date for "is the served candidate current": the end of a
+        # user window that ends in the past, else today (None).
+        _requested_window_end = None
+        if end_year:
+            try:
+                window_end = date(int(end_year), 12, 31)
+            except (TypeError, ValueError):
+                window_end = None
+            if window_end is not None and window_end < datetime.now(timezone.utc).date():
+                _requested_window_end = window_end
+
         async def _fetch_single_country(country_code_raw: str) -> Optional[NormalizedData]:
             """Fetch data for a single country, returning None on failure."""
             async with semaphore:
@@ -1208,11 +1221,24 @@ class BISProvider(BaseProvider):
                             (best.metadata.endDate if best.metadata else None),
                             len(candidate_results) - 1,
                         )
-                    if transport_errors and best.metadata is not None:
+                    if (
+                        transport_errors
+                        and best.metadata is not None
+                        and latest_period_is_stale(
+                            best.metadata.endDate,
+                            best.metadata.frequency,
+                            as_of=_requested_window_end,
+                        )
+                    ):
                         # Freshness-wins could not compare against a candidate
                         # that never answered (e.g. the XM aggregate timed out
                         # while a discontinued national key served), so the
-                        # pick may not be the freshest BIS series: say so.
+                        # pick may not be the freshest BIS series: say so —
+                        # but only when the served series is itself NOT current
+                        # (its last period is older than its frequency's
+                        # release cycle allows, up to the requested window's
+                        # end). A current pick cannot be beaten by a sibling,
+                        # so a note would be a false "may be outdated".
                         unreached = ", ".join(dict.fromkeys(code for code, _ in transport_errors))
                         best.metadata.notes = (best.metadata.notes or []) + [
                             f"BIS could not be reached for candidate series {unreached} "

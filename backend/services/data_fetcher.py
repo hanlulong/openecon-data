@@ -51,6 +51,7 @@ from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_p
 from ..utils.retry import retry_async, DataNotAvailableError, is_provider_unavailable
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
+from ..utils import observation_periods as _op
 from ..routing.country_resolver import CountryResolver
 
 if TYPE_CHECKING:
@@ -1510,39 +1511,15 @@ def materialize_execution_plan(
     return plan
 
 
-# Closed structural table: provider frequency labels / SDMX codes -> period code.
-# Normalization only (no semantic decision); anything unrecognized is None and
-# callers fall back to their previous year-level behavior.
-_FREQUENCY_WORD_CODES: Dict[str, str] = {
-    "annual": "A", "annually": "A", "yearly": "A", "year": "A", "years": "A",
-    "semiannual": "S", "semiannually": "S", "biannual": "S", "semester": "S",
-    "half": "S", "halfyearly": "S",
-    "quarterly": "Q", "quarter": "Q", "quarters": "Q",
-    "monthly": "M", "month": "M", "months": "M",
-    "weekly": "W", "week": "W", "weeks": "W",
-    "daily": "D", "day": "D", "days": "D",
-}
-_FREQUENCY_LETTER_CODES: Dict[str, str] = {
-    "A": "A", "Y": "A", "S": "S", "H": "S", "Q": "Q", "M": "M", "W": "W", "D": "D", "B": "D",
-}
+# Frequency-label normalization and calendar period buckets live in
+# utils/observation_periods (shared with providers); private aliases keep this
+# module's call sites unchanged.
+_FREQUENCY_WORD_CODES = _op.FREQUENCY_WORD_CODES
+_FREQUENCY_LETTER_CODES = _op.FREQUENCY_LETTER_CODES
+_frequency_code = _op.frequency_code
+_observation_period = _op.observation_period
 # Coarseness order (finest first) — used to pick the COARSER of two signals.
 _FREQUENCY_RANK = {"D": 0, "W": 1, "M": 2, "Q": 3, "S": 4, "A": 5}
-
-
-def _frequency_code(value: Any) -> Optional[str]:
-    """Normalize a frequency label ("Monthly", "Quarterly, End of Period", "M",
-    "semi-annual", "Weekly, Ending Friday") to D/W/M/Q/S/A, or None."""
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if len(text) == 1:
-        return _FREQUENCY_LETTER_CODES.get(text.upper())
-    lowered = text.lower().replace("semi-annual", "semiannual").replace("half-year", "halfyearly")
-    for token in re.findall(r"[a-z]+", lowered):
-        code = _FREQUENCY_WORD_CODES.get(token)
-        if code:
-            return code
-    return None
 
 
 def _spacing_frequency_code(dates: List[date]) -> Optional[str]:
@@ -1578,34 +1555,6 @@ def _series_period_code(series: Any, dates: List[date]) -> Optional[str]:
     if spaced is not None and _FREQUENCY_RANK[spaced] > _FREQUENCY_RANK[labeled]:
         return spaced
     return labeled
-
-
-def _observation_period(obs_date: date, period_code: Optional[str]) -> tuple[date, date]:
-    """Calendar bucket CONTAINING ``obs_date`` at the series frequency.
-
-    Containment (not date+length) is deliberate: providers stamp periods at
-    the start (2026-10-01) OR the end (2026-10-31) — both lie in October.
-    Weekly uses a +/-6-day span so week-start and week-ending stamps both
-    cover their week. Unknown frequency -> the whole calendar year (the
-    previous year-level convention).
-    """
-    if period_code == "D":
-        return obs_date, obs_date
-    if period_code == "W":
-        return obs_date - timedelta(days=6), obs_date + timedelta(days=6)
-    year = obs_date.year
-    if period_code == "M":
-        first_month = last_month = obs_date.month
-    elif period_code == "Q":
-        first_month = ((obs_date.month - 1) // 3) * 3 + 1
-        last_month = first_month + 2
-    elif period_code == "S":
-        first_month = 1 if obs_date.month <= 6 else 7
-        last_month = first_month + 5
-    else:
-        first_month, last_month = 1, 12
-    last_day = calendar.monthrange(year, last_month)[1]
-    return date(year, first_month, 1), date(year, last_month, last_day)
 
 
 def _window_bound(value: Any, *, is_end: bool) -> Optional[date]:
