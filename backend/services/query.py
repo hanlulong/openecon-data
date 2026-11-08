@@ -5194,6 +5194,7 @@ class QueryService:
             _query_type = None
             _delta = None
             _informational_subtype = None
+            _informational_language = None
             _llm_new_query = False
             if _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
@@ -5210,6 +5211,10 @@ class QueryService:
                         if _delta is not None:
                             _query_type = _delta.query_type or "parameter_delta"
                             _informational_subtype = _delta.informational_subtype
+                            # Response language for a non-delta answer (the
+                            # delta itself is cleared below): explicit switch
+                            # wins, else the conversation's sticky language.
+                            _informational_language = merged_language(_current_conv_state, _delta)
                             logger.info("LLM classified+extracted: type=%s, delta_type=%s for: %s",
                                         _query_type, _delta.delta_type, query[:50])
                             # Non-delta types: clear delta, dispatch to correct handler
@@ -5249,6 +5254,7 @@ class QueryService:
                     originalQuery=query,
                     queryType="informational",
                     informationalSubtype=_informational_subtype,
+                    language=_informational_language,
                     apiProvider="NONE",
                     indicators=["INFORMATIONAL"],
                     clarificationNeeded=False,

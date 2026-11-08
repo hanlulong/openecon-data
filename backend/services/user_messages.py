@@ -230,6 +230,26 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     "frequency_label_Q": {"en": "quarterly", "zh": "季度"},
     "frequency_label_S": {"en": "semi-annual", "zh": "半年度"},
     "frequency_label_A": {"en": "annual", "zh": "年度"},
+    # (3e) Informational definition answers (indicator_clarification
+    # _handle_definition_query / _DefinitionSentinel.resolve). The prose
+    # follows the question's language, so the static pointer at a data
+    # request does too; the second is the honest answer when no explanation
+    # could be generated. Keep the English byte-identical to the literals.
+    "informational_definition_footer": {
+        "en": "To see actual data, try asking something like: *\"Show me [indicator] for [country]\"*",
+        "zh": "如需查看实际数据，可以这样提问：*“显示[国家]的[指标]数据”*",
+    },
+    "informational_definition_unavailable": {
+        "en": (
+            "I couldn't generate an explanation for that right now. "
+            "To see actual data, try asking something like: "
+            "*\"Show me [indicator] for [country]\"*"
+        ),
+        "zh": (
+            "暂时无法生成该问题的解释。"
+            "如需查看实际数据，可以这样提问：*“显示[国家]的[指标]数据”*"
+        ),
+    },
     # (4) Multi-indicator partial-failure note (data_fetcher.fetch_multi_indicator_data).
     "multi_indicator_partial": {
         "en": (

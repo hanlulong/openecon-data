@@ -563,3 +563,64 @@ def test_informational_subtype_normalizer() -> None:
         (None, None),
     ]:
         assert ParsedIntent(**base, informationalSubtype=value).informationalSubtype == expected
+
+
+# ---------------------------------------------------------------------------
+# The definition answer's static chrome follows the question's language
+# (parse LLM's intent.language / the conversation's sticky language on a
+# Tier-2 follow-up): the prose already does, so a zh asker no longer gets a
+# Chinese explanation with an English footer, or an all-English fallback.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("language, footer, foreign", [
+    ("zh", "如需查看实际数据", "To see actual data"),
+    ("en", "To see actual data, try asking", "如需查看实际数据"),
+    (None, "To see actual data, try asking", "如需查看实际数据"),
+])
+def test_definition_footer_follows_the_question_language(
+    service: QueryService, language: Optional[str], footer: str, foreign: str,
+) -> None:
+    generate = AsyncMock(return_value={"choices": [{"message": {"content": "社融是社会融资规模。"}}]})
+    with patch.object(service.openrouter.llm_provider, "generate", generate):
+        result = _info_turn(service, "什么是社融", "definition", indicators=["social financing"],
+                            apiProvider="ChinaMacro", language=language)
+
+    message = result.response.message
+    assert message.startswith("社融是社会融资规模。")
+    assert footer in message and foreign not in message
+
+
+@pytest.mark.parametrize("language, expected, foreign", [
+    ("zh", "暂时无法生成该问题的解释", "couldn't generate"),
+    ("en", "I couldn't generate an explanation", "暂时无法"),
+])
+def test_definition_fallback_follows_the_question_language(
+    service: QueryService, language: str, expected: str, foreign: str,
+) -> None:
+    with patch.object(service.openrouter, "llm_provider", None):
+        result = _info_turn(service, "什么是社融", "definition", indicators=["social financing"],
+                            apiProvider="ChinaMacro", language=language)
+
+    assert not result.reached_fetch
+    assert result.response.message.startswith(expected)
+    assert foreign not in result.response.message
+
+
+def test_follow_up_definition_uses_the_conversation_language(service: QueryService) -> None:
+    """Tier-2 dispatch builds a placeholder intent without a parse: it must
+    carry the conversation's language so the fallback renders in it."""
+    conv_id = conversation_manager.get_or_create("conv-info-authority-language")
+    conversation_manager.add_message_safe(conv_id, "user", "美国GDP", intent=_intent("美国GDP", language="zh"))
+    conversation_manager.set_conversation_state(
+        conv_id, ConversationState(indicator="GDP", country="US", provider="FRED", language="zh"),
+    )
+    delta = FollowUpDelta(query_type="informational", informational_subtype="definition")
+    with patch.object(DeltaExtractor, "extract", return_value=None), \
+         patch.object(DeltaExtractor, "extract_with_llm", new_callable=AsyncMock, return_value=delta), \
+         patch.object(service.openrouter, "llm_provider", None):
+        result = _process(service, "GDP到底衡量什么？", _intent("unused"),
+                          conversation_id=conv_id, real_informational_handler=True)
+
+    assert result.parse.await_count == 0 and not result.reached_fetch
+    assert result.info.calls[0]["intent"].language == "zh"
+    assert result.response.message.startswith("暂时无法生成该问题的解释")

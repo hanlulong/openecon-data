@@ -1915,16 +1915,27 @@ def _handle_indicator_count_query(
     )
 
 
+_DEFINITION_FOOTER_EN = "To see actual data, try asking something like: *\"Show me [indicator] for [country]\"*"
+_DEFINITION_UNAVAILABLE_EN = (
+    "I couldn't generate an explanation for that right now. "
+    "To see actual data, try asking something like: "
+    "*\"Show me [indicator] for [country]\"*"
+)
+
+
 async def _handle_definition_query(
     qs: Any,
     query: str,
     conversation_id: str,
     tracker: Optional[ProcessingTracker] = None,
+    language: Optional[str] = None,
 ) -> Optional[QueryResponse]:
     """Use the LLM to answer definitional / explanatory questions.
 
     Returns None when no explanation LLM is available or it produced nothing;
     the caller (``_DefinitionSentinel.resolve``) turns that into honest text.
+    ``language`` is the parse LLM's tag for the question: the model answers
+    in the question's language, so the static footer is rendered in it too.
     """
     llm = getattr(qs, "openrouter", None)
     provider = getattr(llm, "llm_provider", None) if llm else None
@@ -1958,8 +1969,8 @@ async def _handle_definition_query(
         if not text:
             return None
 
-        # Append a helpful follow-up suggestion
-        text += "\n\nTo see actual data, try asking something like: *\"Show me [indicator] for [country]\"*"
+        # Append a helpful follow-up suggestion, in the question's language.
+        text += "\n\n" + (get_message("informational_definition_footer", language) or _DEFINITION_FOOTER_EN)
 
         return QueryResponse(
             conversationId=conversation_id,
@@ -2068,7 +2079,7 @@ def handle_informational_intent(
     if subtype == "definition":
         # Signal that this is a definition query — the async dispatch
         # in query.py will call _handle_definition_query.
-        return _DefinitionSentinel(qs, query, conversation_id, tracker)
+        return _DefinitionSentinel(qs, query, conversation_id, tracker, language=intent.language)
 
     # ── indicator search (original behavior) ───────────────────────
     provider = str(intent.apiProvider or "").strip()
@@ -2150,15 +2161,19 @@ class _DefinitionSentinel:
     The caller in query.py checks for this type and awaits the async handler.
     """
     def __init__(self, qs: Any, query: str, conversation_id: str,
-                 tracker: Optional[ProcessingTracker] = None):
+                 tracker: Optional[ProcessingTracker] = None,
+                 language: Optional[str] = None):
         self.qs = qs
         self.query = query
         self.conversation_id = conversation_id
         self.tracker = tracker
+        # The parse LLM's language tag for the question (None -> English).
+        self.language = language
 
     async def resolve(self) -> QueryResponse:
         response = await _handle_definition_query(
             self.qs, self.query, self.conversation_id, self.tracker,
+            language=self.language,
         )
         if response is not None:
             return response
@@ -2168,9 +2183,8 @@ class _DefinitionSentinel:
             conversationId=self.conversation_id,
             clarificationNeeded=False,
             message=(
-                "I couldn't generate an explanation for that right now. "
-                "To see actual data, try asking something like: "
-                "*\"Show me [indicator] for [country]\"*"
+                get_message("informational_definition_unavailable", self.language)
+                or _DEFINITION_UNAVAILABLE_EN
             ),
             processingSteps=self.tracker.to_list() if self.tracker else None,
         )
