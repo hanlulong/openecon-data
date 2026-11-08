@@ -469,3 +469,30 @@ def test_fred_lookup_series_info_memoizes_only_definitive_answers() -> None:
     # The definitive answer is reused by later resolution passes (one call).
     assert asyncio.run(fred.lookup_series_info("WPSFD4")) == ("found", {"id": "WPSFD4"})
     assert fred._get_with_retry.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Named-code provenance is never data-cache identity
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("with_plan_identity", [False, True])
+@pytest.mark.parametrize(
+    "stamps",
+    [
+        {ir.REQUESTED_SERIES_ID_KEY: "T10YIE", ir.REQUESTED_SERIES_ID_STATUS_KEY: "lock",
+         ir.REQUESTED_SERIES_PROVIDER_KEY: "FRED"},
+        {ir.REQUESTED_SERIES_ID_KEY: "T10YIE", ir.REQUESTED_SERIES_ID_STATUS_KEY: "not_found"},
+        {ir.REQUESTED_SERIES_ID_KEY: "t10yie", ir.REQUESTED_SERIES_ID_STATUS_KEY: "unverified",
+         ir.REQUESTED_SERIES_PROVIDER_KEY: "FRED"},
+    ],
+)
+def test_requested_series_stamps_never_split_the_cache_key(stamps, with_plan_identity) -> None:
+    from backend.services.query import QueryService
+
+    svc = QueryService.__new__(QueryService)
+    base = {"indicator": "T10YIE", "country": "US", "startDate": "2024-01-01"}
+    if with_plan_identity:
+        base["__execution_plan_identity"] = {"provider_request": {"provider": "FRED", "series_id": "T10YIE"}}
+    stamped = {**base, **stamps}
+    assert svc._build_cache_params("FRED", stamped) == svc._build_cache_params("FRED", dict(base))
+    assert not set(stamps) & set(svc._build_cache_params("FRED", stamped))

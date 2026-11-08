@@ -117,6 +117,9 @@ from ..services.semantic_match_judge import (
 )
 from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
+    REQUESTED_SERIES_ID_KEY as _IR_REQUESTED_SERIES_ID_KEY,
+    REQUESTED_SERIES_ID_STATUS_KEY as _IR_REQUESTED_SERIES_ID_STATUS_KEY,
+    REQUESTED_SERIES_PROVIDER_KEY as _IR_REQUESTED_SERIES_PROVIDER_KEY,
     _effective_original_query as _ir_effective_original_query,
     build_exact_indicator_title_intent as _ir_build_exact_indicator_title_intent,
     exact_title_catalog_version as _ir_exact_title_catalog_version,
@@ -3316,6 +3319,12 @@ class QueryService:
             # Same for geography provenance: the served geography (country
             # params) is identity-bearing, its source (default/user) is not.
             "__geo_scope_authority",
+            # Named-code provenance (what the user typed, its existence status
+            # and provider): drives the post-cache requested-series disclosure,
+            # never the data. The served code is in indicator/seriesId.
+            _IR_REQUESTED_SERIES_ID_KEY,
+            _IR_REQUESTED_SERIES_ID_STATUS_KEY,
+            _IR_REQUESTED_SERIES_PROVIDER_KEY,
             # Transient retry bookkeeping — never part of cache identity.
             "__exclude_indicator_codes",
             # Raw query text: identity for the cache is the RESOLVED params, not
