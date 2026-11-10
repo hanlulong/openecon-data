@@ -49,6 +49,7 @@ from ..services.indicator_resolution import (
     is_exact_match_locked as _is_exact_match_locked,
     is_placeholder_indicator_code as _is_placeholder_indicator_code,
     is_resolved_indicator_plausible as _is_resolved_indicator_plausible,
+    select_indicator_concept_label as _select_indicator_concept_label,
 )
 from ..services.provider_strategy import (
     canonical_aggregate_region,
@@ -3320,7 +3321,13 @@ async def build_prefetch_indicator_choice_clarification(
                 selection_name,
             ):
                 params["indicator"] = selection_code
-                params["__semantic_indicator_label"] = indicator_query
+                # The CONCEPT, not indicator_query: that is retrieval text
+                # (exact-title raw query, country/region qualifiers) and
+                # the label is persisted and re-composed on follow-ups.
+                concept_label = await asyncio.to_thread(
+                    _select_indicator_concept_label, qs, intent
+                )
+                params["__semantic_indicator_label"] = concept_label or indicator_query
                 params["__semantic_authority"] = "llm_adjudication"
                 params["__decision_source"] = str(getattr(selection, "source", "") or "llm_pick")
                 # Same pick provenance as the main resolution seam (kept

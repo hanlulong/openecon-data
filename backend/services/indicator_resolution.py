@@ -2927,8 +2927,11 @@ async def resolve_indicator_for_fetch(
             or ""
         ).strip()
         if not semantic_label:
+            # The CONCEPT, never the retrieval text (country/region
+            # qualifiers, exact-title raw query): see
+            # select_indicator_concept_label.
             semantic_label = (
-                select_indicator_query_for_resolution(svc, intent)
+                select_indicator_concept_label(svc, intent)
                 or _effective_original_query(intent)
                 or str(intent.indicators[0] if intent.indicators else "")
             ).strip()
@@ -3497,8 +3500,99 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
 
 def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedIntent) -> str:
+    """Retrieval text from the branchy chooser below, without its branch tag."""
+    return _choose_indicator_query(svc, intent)[0]
+
+
+# Branch tag for the chooser's "the whole original query looks like a
+# provider-native title" return. That raw text is a RETRIEVAL decision (the
+# title surface, geography prefix included), not the concept.
+_CHOSEN_EXACT_TITLE_RAW = "exact_title_raw"
+# Structural trim for the text left after removing the parsed phrase.
+_CONCEPT_RESIDUAL_TRIM = " \t,;:!?()[]-–—"
+_CONCEPT_RESIDUAL_CONNECTORS = frozenset({"for", "in"})
+
+
+def _structured_scope_iso2(intent: ParsedIntent) -> set:
+    """ISO2 codes of the geography the parser put in the intent's slots."""
+    params = intent.parameters or {}
+    scope: set = set()
+    for key in ("country", "countries", "reporter", "reporters"):
+        value = params.get(key)
+        for item in value if isinstance(value, (list, tuple)) else [value]:
+            iso2 = CountryResolver.normalize(str(item or "").strip())
+            if iso2:
+                scope.add(iso2.upper())
+    return scope
+
+
+def _residual_is_scope_country(text: str, phrase: str, intent: ParsedIntent) -> bool:
+    """True when ``text`` is ``phrase`` plus exactly one scoped country name.
+
+    Structural check only: ``phrase`` is removed as one contiguous span, and
+    what is left (punctuation and a for/in connector trimmed) must resolve to
+    a country the parser already placed in the intent's structured scope.
     """
-    Pick the best query string for indicator resolution.
+    index = text.lower().find(phrase.lower())
+    if index < 0:
+        return False
+    words = f"{text[:index]} {text[index + len(phrase):]}".strip(_CONCEPT_RESIDUAL_TRIM).split()
+    while words and words[0].lower() in _CONCEPT_RESIDUAL_CONNECTORS:
+        words.pop(0)
+    while words and words[-1].lower() in _CONCEPT_RESIDUAL_CONNECTORS:
+        words.pop()
+    residual = " ".join(words).strip(_CONCEPT_RESIDUAL_TRIM)
+    if not residual:
+        return False
+    iso2 = CountryResolver.normalize(residual) or CountryResolver.normalize(residual.strip("."))
+    return bool(iso2) and iso2.upper() in _structured_scope_iso2(intent)
+
+
+def select_indicator_concept_label(svc: Any, intent: ParsedIntent) -> str:
+    """The CONCEPT text to record as a derived ``__semantic_indicator_label``.
+
+    The label is persisted in conversation state, re-composed with a NEW
+    geography on follow-ups ("<Country> <concept>"), and read by the
+    cross-provider fallback judge as "the requested concept". So it must be
+    the concept the parser (LLM) separated from geography, never
+    retrieval-steering text. Two retrieval decisions used to leak into it:
+
+    * the provider country/region qualifiers (" Japan" appended for a non-US
+      FRED ask): avoided by reading the UNQUALIFIED chooser, never the
+      region/country-qualifying wrapper;
+    * the exact-title branch, which returns the raw query (geography prefix
+      included) so retrieval sees the whole title. "US unemployment rate" was
+      persisted, and "compare with Canada" then searched FRED for
+      "Canada US unemployment rate".
+
+    For the exact-title branch the parsed phrase replaces the raw text only
+    when the provider catalog says that phrase is itself a complete title AND
+    the raw text adds exactly a country already in the structured scope.
+    Anything else (a title qualifier such as "Black or African American", a
+    StatsCan product title, a name that merely starts with a country) keeps
+    the raw text, as before. Retrieval text is unchanged by this function.
+    """
+    text, branch = _choose_indicator_query(svc, intent)
+    if branch != _CHOSEN_EXACT_TITLE_RAW:
+        return text
+    # The chooser's provider-code check runs before its exact-title branch,
+    # so the parsed phrase is never provider-code-shaped here.
+    parsed = str(intent.indicators[0] if intent.indicators else "").strip()
+    provider = _normalize_provider_name(intent.apiProvider or "")
+    if (
+        parsed
+        and parsed.lower() != text.lower()
+        and _residual_is_scope_country(text, parsed, intent)
+        and looks_like_exact_provider_title_match(parsed, provider)
+    ):
+        return parsed
+    return text
+
+
+def _choose_indicator_query(svc: Any, intent: ParsedIntent) -> Tuple[str, str]:
+    """
+    Pick the best query string for indicator resolution, and name the branch
+    that picked it (see _CHOSEN_EXACT_TITLE_RAW).
 
     Uses LLM indicator text by default, but falls back to the original user
     query when semantic cues clearly mismatch.
@@ -3508,18 +3602,18 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
     query text or distilled indicator phrase.
     """
     if not intent.indicators:
-        return ""
+        return "", "empty"
 
     indicator_query = str(intent.indicators[0] or "").strip()
     if not indicator_query:
-        return ""
+        return "", "empty"
 
     # For follow-up queries, originalQuery is the raw follow-up text
     # (e.g. "show from IMF instead") which has no indicator information.
     # Use resolvedQuery (e.g. "GDP per capita India") for resolution.
     original_query = _effective_original_query(intent)
     if not original_query:
-        return indicator_query
+        return indicator_query, "parsed"
 
     distilled_original = build_distilled_indicator_query(svc, original_query)
     semantic_indicator_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
@@ -3549,7 +3643,7 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
             indicator_query,
             provider,
         )
-        return _fallback_to_original_or_distilled()
+        return _fallback_to_original_or_distilled(), "provider_code"
 
     if provider and looks_like_exact_provider_title_match(original_query, provider):
         if provider_locked and not is_exact_match_locked(intent.parameters or {}) and len(intent.indicators or []) <= 1:
@@ -3557,17 +3651,17 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
                 "🔎 Provider-locked original query looks like an exact %s title; using parsed/distilled indicator phrase for selector fallback.",
                 provider,
             )
-            return semantic_indicator_label or indicator_query or distilled_original or original_query
+            return semantic_indicator_label or indicator_query or distilled_original or original_query, "exact_title_locked"
         logger.info(
             "🔎 Original query looks like an exact %s indicator title. Using original query for resolution.",
             provider,
         )
-        return original_query
+        return original_query, _CHOSEN_EXACT_TITLE_RAW
 
     indicator_lower = indicator_query.lower()
     if any(term in indicator_lower for term in ("discontinued", "deprecated", "legacy")):
         logger.info("🔎 Parsed indicator appears deprecated/discontinued. Using original query.")
-        return _fallback_to_original_or_distilled()
+        return _fallback_to_original_or_distilled(), "deprecated"
 
     original_lower = original_query.lower()
     has_ratio_original = _has_ratio_cue(original_lower)
@@ -3576,7 +3670,7 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
         logger.info(
             "🔎 Indicator dropped GDP-ratio context. Using original query for resolution."
         )
-        return _fallback_to_original_or_distilled()
+        return _fallback_to_original_or_distilled(), "ratio_cue"
 
     original_cues = extract_indicator_cues(original_query)
     indicator_cues = extract_indicator_cues(indicator_query)
@@ -3594,7 +3688,7 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
             sorted(high_signal_original_cues),
             sorted(high_signal_indicator_cues),
         )
-        return _fallback_to_original_or_distilled()
+        return _fallback_to_original_or_distilled(), "cue_mismatch"
 
     directional_cues = {"import", "export", "trade_balance"}
     original_directional = high_signal_original_cues & directional_cues
@@ -3605,7 +3699,7 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
             sorted(original_directional),
             sorted(indicator_directional),
         )
-        return _fallback_to_original_or_distilled()
+        return _fallback_to_original_or_distilled(), "directional_cue"
 
     original_terms = tokenize_indicator_terms(original_query)
     indicator_terms = tokenize_indicator_terms(indicator_query)
@@ -3624,12 +3718,12 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
                 "🔎 Low indicator-term overlap (%.2f). Using original query for resolution.",
                 overlap,
             )
-            return _fallback_to_original_or_distilled()
+            return _fallback_to_original_or_distilled(), "low_overlap"
 
     # Ranking/comparison phrasing can contain execution words ("top", "rank",
     # "highest") that are poor resolver inputs. Prefer a distilled metric phrase.
     if (is_ranking_query(original_query) or is_comparison_query(original_query)) and distilled_original:
-        return distilled_original
+        return distilled_original, "distilled_ranking"
 
     # If parser returned a long natural-language sentence as the indicator,
     # prefer a distilled metric phrase for stable cross-provider resolution.
@@ -3638,9 +3732,9 @@ def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedI
         and distilled_original
         and not looks_like_exact_provider_title_match(original_query, provider)
     ):
-        return distilled_original
+        return distilled_original, "distilled_long"
 
-    return indicator_query
+    return indicator_query, "parsed"
 
 
 # ---------------------------------------------------------------------------

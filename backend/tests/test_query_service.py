@@ -4042,7 +4042,10 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
         self.assertEqual(intent.parameters.get("indicator"), "UNRATE")
-        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "US unemployment rate")
+        # The persisted label is the CONCEPT, not the exact-title retrieval
+        # text ("US unemployment rate"), so a later "compare with Canada"
+        # composes "Canada unemployment rate".
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "unemployment rate")
         self.assertEqual(intent.parameters.get("__semantic_authority"), "llm_adjudication")
         self.assertEqual(intent.parameters.get("__decision_source"), "llm_pick")
 
