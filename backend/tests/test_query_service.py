@@ -79,6 +79,9 @@ class QueryServiceTests(unittest.TestCase):
         self.service.settings.use_outcome_decision_stage = False
         self.service.settings.use_post_fetch_semantic_judge = False
         self.service.settings.use_staged_state_commit = False
+        # These unit tests supply synthetic fallback data; model acceptance is
+        # an explicit dependency. The judge's refusal paths have their own suite.
+        self.service._judge_fallback_match = AsyncMock(return_value=True)
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -7091,7 +7094,7 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(intent.parameters.get("indicator"), "NGDP_RPCH")
         self.assertEqual(intent.parameters.get("country"), "US")
-        self.assertEqual(intent.parameters.get("__semantic_provider_locked"), True)
+        self.assertFalse(intent.parameters.get("__semantic_provider_locked"))
 
     def test_collective_answer_member_delta_rehydrates_recent_country_with_current_indicator(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-collective-answer-members-add-back")

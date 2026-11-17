@@ -141,6 +141,7 @@ from ..services.semantic_match_judge import (
 )
 from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
+    is_exact_match_locked as _ir_is_exact_match_locked,
     REQUESTED_SERIES_ID_KEY as _IR_REQUESTED_SERIES_ID_KEY,
     REQUESTED_SERIES_ID_STATUS_KEY as _IR_REQUESTED_SERIES_ID_STATUS_KEY,
     REQUESTED_SERIES_PROVIDER_KEY as _IR_REQUESTED_SERIES_PROVIDER_KEY,
@@ -213,6 +214,8 @@ from ..services.indicator_clarification import (
     looks_like_provider_indicator_code as _ic_looks_like_provider_indicator_code,
 )
 from ..services.data_fetcher import (
+    _enforce_user_time_window as _df_enforce_user_time_window,
+    _window_bound as _df_window_bound,
     fetch_from_coingecko as _df_fetch_from_coingecko,
     fetch_exchange_rate_with_historical_fallback as _df_fetch_exchange_rate_with_historical_fallback,
     fetch_historical_exchange_from_fred as _df_fetch_historical_exchange_from_fred,
@@ -448,7 +451,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-05-16.1"
+    CACHE_KEY_VERSION = "2026-11-17.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -2335,9 +2338,8 @@ class QueryService:
         the candidate is refused and a no-verdict primary ends in the honest
         outage answer.
         None: the LLM itself is unavailable (no LLM, open local-LLM circuit,
-        failure, or the judge's own timeout) -- the caller keeps its non-LLM
-        decision so an LLM outage does not cascade into rejecting every
-        fallback.
+        failure, or the judge's own timeout). The caller refuses the unjudged
+        candidate: only an affirmative model judgment can authorize a substitute.
 
         Bounded by the request budget: a small fixed cap, clamped by the
         remaining I/O time (deadline minus the answer reserve).
@@ -2565,6 +2567,29 @@ class QueryService:
         if state is None:
             return
         params = (intent.parameters or {}) if intent is not None else {}
+        # The initial state is extracted before fetch defaults are applied.
+        # Commit the scope that actually produced the verified answer so an
+        # additive follow-up does not silently expand it to full history.
+        if intent is not None:
+            executed_start = params.get("startDate")
+            executed_end = params.get("endDate")
+            if not executed_start and params.get("start_year"):
+                bound = _df_window_bound(params["start_year"], is_end=False)
+                executed_start = bound.isoformat() if bound else None
+            if not executed_end and params.get("end_year"):
+                bound = _df_window_bound(params["end_year"], is_end=True)
+                executed_end = bound.isoformat() if bound else None
+            authority = params.get("__time_scope_authority")
+            if executed_start or executed_end:
+                state.start_date, state.end_date = executed_start, executed_end
+                if authority in {"user", "default"}:
+                    state.time_scope_source = authority
+            elif (
+                getattr(state, "time_scope_source", None) == "default"
+                and authority == "default"
+                and _ir_is_exact_match_locked(params)
+            ):
+                state.start_date = state.end_date = state.time_scope_source = None
         semantic_indicator_label = str(params.get("__semantic_indicator_label") or "").strip()
         if semantic_indicator_label:
             state.indicator = semantic_indicator_label
@@ -3109,7 +3134,7 @@ class QueryService:
         params: Dict[str, Any] = {
             "__delta_resolved": True,
         }
-        if not delta.changed_indicator:
+        if not delta.changed_indicator and getattr(state, "provider_locked", False):
             params["__semantic_provider_locked"] = True
         if countries:
             if len(countries) == 1:
@@ -3172,12 +3197,14 @@ class QueryService:
 
         combined_data: List[NormalizedData] = []
         failed_members: List[str] = []
+        member_failures: List[tuple[ParsedIntent, Exception]] = []
         # Share-key includes the member's canonical country so a geography-
         # encoded provider code (FRED/StatsCan) is never reused across
         # countries (F6).  Country-agnostic providers (WB/IMF) simply key per
         # country, which still resolves correctly.
         shared_resolution_codes: Dict[tuple[str, str, str], str] = {}
         shared_label_key = collective_indicator_label.lower()
+        collective_window = materialize_time_scope(state, delta)
 
         for member in target_members:
             member_query = self._collective_member_query(
@@ -3247,7 +3274,7 @@ class QueryService:
 
             try:
                 member_data = await retry_async(
-                    lambda intent=member_intent: self._fetch_data(intent),
+                    lambda intent=member_intent: self._fetch_data(intent.model_copy(deep=True)),
                     max_attempts=2,
                     initial_delay=0.3,
                 )
@@ -3260,6 +3287,7 @@ class QueryService:
                 )
                 member_data = await _recover_member_with_fallback(exc)
                 if not member_data:
+                    member_failures.append((member_intent, exc))
                     failed_members.append(member_scope)
                     continue
 
@@ -3273,6 +3301,19 @@ class QueryService:
                     failed_members.append(member_scope)
                     continue
 
+            unfiltered_data = member_data
+            member_data = _df_enforce_user_time_window(
+                collective_window, query,
+                [series.model_copy(deep=True) for series in member_data],
+                enforce_carried=True,
+            )
+            if not member_data:
+                latest = max((point.date for series in unfiltered_data for point in series.data), default="")
+                member_failures.append((member_intent, DataNotAvailableError(
+                    f"no_data_in_requested_window latest_available={latest}"
+                )))
+                failed_members.append(member_scope)
+                continue
             member_data = self._rerank_data_by_query_relevance(member_query, member_data)
             if self._is_ranking_query(member_query):
                 member_data = self._apply_ranking_projection(member_query, member_data)
@@ -3317,6 +3358,16 @@ class QueryService:
             combined_data.extend(member_data)
 
         if failed_members:
+            for failed_intent, failure in member_failures:
+                if is_no_verdict(failure):
+                    return self._build_provider_outage_response(
+                        conversation_id, failed_intent, failure,
+                        tracker.to_list() if tracker else None,
+                    )
+                if "no_data_in_requested_window" in str(failure):
+                    return self._render_window_marker_response(
+                        conversation_id, failed_intent, tracker, failure,
+                    )
             return QueryResponse(
                 conversationId=conversation_id,
                 clarificationNeeded=False,
@@ -3329,11 +3380,11 @@ class QueryService:
                 processingSteps=tracker.to_list() if tracker else None,
             )
 
-        response_provider = (
-            str(getattr(target_members[0], "provider", "") or "WorldBank")
-            if len({str(getattr(member, "provider", "") or "") for member in target_members}) == 1
-            else "MULTI"
-        )
+        serving_providers = {
+            normalize_provider_name(series.metadata.source)
+            for series in combined_data
+        }
+        response_provider = next(iter(serving_providers)) if len(serving_providers) == 1 else "MULTI"
         response_countries = list(
             dict.fromkeys(
                 country
@@ -3347,11 +3398,8 @@ class QueryService:
         elif response_countries:
             response_params["countries"] = response_countries
         if len(target_members) == 1:
-            member_code = str(
-                getattr(target_members[0], "provider_code", None)
-                or getattr(target_members[0], "series_id", None)
-                or ""
-            ).strip()
+            returned_codes = {str(series.metadata.seriesId or "").strip() for series in combined_data}
+            member_code = next(iter(returned_codes)) if len(returned_codes) == 1 else ""
             if member_code and not delta.changed_indicator:
                 response_params["indicator"] = member_code
                 response_params["__delta_resolved"] = True
@@ -3406,10 +3454,7 @@ class QueryService:
             updated_state.countries = response_countries
         updated_state.provider = None if response_provider == "MULTI" else response_provider
         updated_state.routed_provider = updated_state.provider
-        updated_state.provider_locked = (
-            response_provider != "MULTI"
-            and len(target_members) <= 1
-        )
+        updated_state.provider_locked = bool(getattr(state, "provider_locked", False))
         update_answer_members_from_data(updated_state, combined_data, intent=response_intent)
         if delta.added_countries and combined_data:
             current_members = list(getattr(updated_state, "active_answer_members", None) or [])
@@ -4586,7 +4631,7 @@ class QueryService:
             clarificationNeeded=False,
             message=message,
             error=error,
-            processingSteps=tracker.to_list(),
+            processingSteps=tracker.to_list() if tracker else None,
             windowCoverage=coverage,
         )
 
@@ -4647,12 +4692,21 @@ class QueryService:
             )
         target_countries = self._collect_target_countries(intent.parameters)
         target_country = target_countries[0] if target_countries else None
-        fallback_providers = self._get_fallback_providers(
-            primary_provider,
-            indicator,
-            country=target_country,
-            countries=target_countries,
-        )
+        excluded_providers = {
+            normalize_provider_name(str(provider))
+            for provider in (intent.parameters or {}).get("__fallback_excluded_providers", [])
+            if provider
+        } | {primary_provider}
+        fallback_providers = list(dict.fromkeys(
+            normalize_provider_name(provider)
+            for provider in self._get_fallback_providers(
+                primary_provider,
+                indicator,
+                country=target_country,
+                countries=target_countries,
+            )
+            if normalize_provider_name(provider) not in excluded_providers
+        ))
 
         if not fallback_providers:
             raise primary_error
@@ -4667,10 +4721,14 @@ class QueryService:
         # Build fallback intents upfront so we can try the top providers in parallel.
         def _build_fallback_intent(fallback_provider: str) -> ParsedIntent:
             fb_params = dict(intent.parameters or {})
-            fb_params["__fallback_excluded_providers"] = [primary_provider]
+            fb_params["__fallback_excluded_providers"] = sorted(excluded_providers)
             # Remove provider-specific resolved indicator identifiers so fallback
             # providers can resolve indicator codes in their own namespace.
-            for key in ("indicator", "seriesId", "series_id", "code"):
+            for key in (
+                "indicator", "seriesId", "series_id", "code",
+                "__exact_provider_code_match", "__exact_indicator_title_match",
+                "__semantic_authority", "__decision_source",
+            ):
                 fb_params.pop(key, None)
             # FRED country-scope discovery keys are FRED-dispatch scoped; on a
             # fallback provider they would only fragment its cache identity.
@@ -4729,10 +4787,9 @@ class QueryService:
                 # keyword gate may REJECT, but only the model judge may ACCEPT
                 # (a keyword overlap accepted e.g. "high-tech exports % of
                 # manufactured exports" for "China exports to US"). A judge
-                # that is unavailable keeps the gate's decision so an LLM
-                # outage does not cascade.
+                # that is unavailable cannot authorize a substitute.
                 relevant = bool(result) and self._is_fallback_relevant(
-                    intent.indicators,
+                    [indicator] if indicator else intent.indicators,
                     result,
                     target_countries,
                     intent.originalQuery,
@@ -4747,15 +4804,10 @@ class QueryService:
                 return None
             try:
                 accepted = await self._judge_fallback_match(intent, fallback_provider, result, indicator)
-            except Exception as judge_exc:  # the judge is advisory: unavailable
+            except Exception as judge_exc:
                 logger.warning("Fallback judge failed for %s: %s", fallback_provider, judge_exc)
                 accepted = None
-            if accepted is None:
-                logger.warning(
-                    "Fallback judge unavailable; keeping the keyword gate's acceptance of %s",
-                    fallback_provider,
-                )
-            elif not accepted:
+            if accepted is not True:
                 logger.warning(
                     f"⚠️ Fallback to {fallback_provider} rejected by the semantic judge, skipping"
                 )

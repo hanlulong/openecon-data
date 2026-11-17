@@ -253,15 +253,9 @@ class UnifiedRouter:
 
     # Fallback chains when primary provider fails.
     #
-    # Design: no direct A↔B mutual pairs (e.g. if A→B then B must NOT→A).
-    # The runtime get_fallbacks() also filters out providers already tried
-    # via an ``exclude`` parameter to prevent cycles at call sites.
-    #
-    # Tier structure (fallbacks generally flow downward):
-    #   Tier 1 (specialty): OECD, BIS, StatsCan, CoinGecko, Comtrade, ExchangeRate
-    #   Tier 2 (regional):  Eurostat
-    #   Tier 3 (broad):     FRED, IMF
-    #   Tier 4 (universal): WorldBank  (sink — no outgoing fallbacks)
+    # These are finite candidate lists, not semantic acceptance decisions.
+    # Fallback execution fetches candidates directly and carries attempted
+    # provider exclusions; mutual relationships cannot re-enter a failed source.
     FALLBACK_MAP: Dict[str, List[str]] = {
         "OECD": ["Eurostat", "WorldBank"],
         "EUROSTAT": ["WorldBank", "IMF"],
@@ -270,7 +264,7 @@ class UnifiedRouter:
         "STATSCAN": ["FRED", "WorldBank"],
         "FRED": ["WorldBank"],
         "COMTRADE": ["Eurostat", "WorldBank"],
-        "WORLDBANK": [],
+        "WORLDBANK": ["IMF", "FRED"],
         "EXCHANGERATE": ["FRED"],
         "COINGECKO": ["FRED"],
         # ChinaMacro live endpoints can drop; FRED carries lagged China

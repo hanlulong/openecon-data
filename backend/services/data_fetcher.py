@@ -1693,7 +1693,8 @@ def _disclose_frequency_mismatch(
 
 
 def _enforce_user_time_window(
-    params: dict[str, Any], original_query: str, result: List[NormalizedData]
+    params: dict[str, Any], original_query: str, result: List[NormalizedData],
+    *, enforce_carried: bool = False,
 ) -> List[NormalizedData]:
     """Honesty filter: when the USER named a time window, never serve
     observations outside it.
@@ -1715,7 +1716,9 @@ def _enforce_user_time_window(
     no-data-for-period path, which the response finalizer explains in the
     user's language.
     """
-    if not result or not _user_set_time_scope(params, original_query):
+    # A collective follow-up preserves the preceding answer's window even
+    # when that window was originally defaulted; its provenance stays intact.
+    if not result or not (enforce_carried or _user_set_time_scope(params, original_query)):
         return result
 
     def _year(value: Any) -> Optional[int]:

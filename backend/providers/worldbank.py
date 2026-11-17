@@ -12,7 +12,8 @@ import httpx
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
 from ..utils.catalog_metadata_signals import catalog_row_is_vintage_archive
-from ..utils.retry import DataNotAvailableError, aggregate_failure
+from ..utils.retry import DataNotAvailableError, ProviderUnavailable, RequestBudgetExhausted, aggregate_failure
+from ..utils.request_budget import io_remaining
 from ..services.http_pool import get_http1_client, effective_timeout
 from .base import BaseProvider
 
@@ -1135,6 +1136,41 @@ class WorldBankProvider(BaseProvider):
         return None
 
     async def fetch_indicator(
+        self,
+        indicator: str,
+        country: Optional[str] = None,
+        countries: Optional[List[str]] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        _skip_alternatives: bool = False,
+        _allow_semantic_alternatives: bool = False,
+        _defaulted_all_country: bool = False,
+    ) -> List[NormalizedData]:
+        # Bound the entire operation, including admission, retries, backoff,
+        # pagination and source recovery. Per-attempt HTTP timeouts alone let
+        # three 25-second attempts exceed the existing 30-second fetch budget.
+        budget = min(30.0, effective_timeout(30.0))
+        remaining = io_remaining()
+        request_limited = remaining is not None and remaining <= budget
+        if request_limited:
+            budget = remaining
+        if budget <= 0:
+            raise RequestBudgetExhausted("No request time remains for World Bank")
+        timer = asyncio.timeout(budget)
+        try:
+            async with timer:
+                return await self._fetch_indicator(
+                    indicator, country, countries, start_date, end_date,
+                    _skip_alternatives, _allow_semantic_alternatives,
+                    _defaulted_all_country,
+                )
+        except TimeoutError as exc:
+            if not timer.expired():
+                raise
+            error = RequestBudgetExhausted if request_limited else ProviderUnavailable
+            raise error("World Bank fetch exceeded its available time budget") from exc
+
+    async def _fetch_indicator(
         self,
         indicator: str,
         country: Optional[str] = None,

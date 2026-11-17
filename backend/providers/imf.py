@@ -839,7 +839,10 @@ class IMFProvider(BaseProvider):
                 dataType=data_type,
                 priceType=None,  # IMF doesn't specify this clearly
                 description=indicator_name,
-                notes=None,
+                notes=([
+                    "IMF World Economic Outlook data may include estimates and projections; "
+                    "consult the source for their status."
+                ] if dataset_anchor.upper() == "WEO" else None),
                 startDate=start_date,
                 endDate=end_date,
             )

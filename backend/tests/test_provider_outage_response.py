@@ -268,6 +268,7 @@ def test_fallback_without_a_budget_is_unchanged(service):
     fetch = AsyncMock(return_value=[_wb_series()])
     with patch.object(service, "_fetch_data", new=fetch), \
          patch.object(service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
+         patch.object(service, "_judge_fallback_match", new=AsyncMock(return_value=True)), \
          patch.object(service, "_is_fallback_relevant", return_value=True):
         result = asyncio.run(service._try_with_fallback(_comtrade_intent(), ProviderUnavailable("down")))
     assert result and fetch.await_count == 1
@@ -445,6 +446,7 @@ async def test_e2e_fallback_still_answers_when_time_allows(outage, monkeypatch):
 
     monkeypatch.setattr(outage.svc, "_fetch_data", _fetch)
     monkeypatch.setattr(outage.svc, "_is_fallback_relevant", lambda *a, **k: True)
+    monkeypatch.setattr(outage.svc, "_judge_fallback_match", AsyncMock(return_value=True))
     response, elapsed = await _post("/api/query", {"query": "US exports 2024", "sessionId": "s-o3"})
     body = response.json()
     print(f"\n[e2e fallback] elapsed={elapsed:.2f}s error={body.get('error')!r}")

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from backend.models import Metadata, NormalizedData, ParsedIntent
 from backend.services.conversation_state_v2 import ConversationState
 from backend.services.query import QueryService
@@ -52,6 +54,7 @@ def _fallback_service(served: list) -> QueryService:
     svc._effective_original_query = Mock(return_value="US inflation")
     svc._looks_like_provider_indicator_code = Mock(return_value=False)
     svc._is_fallback_relevant = Mock(return_value=True)
+    svc._judge_fallback_match = AsyncMock(return_value=True)
     svc._fetch_data = AsyncMock(return_value=served)
     return svc
 
@@ -89,9 +92,8 @@ def test_fallback_restamps_provider_and_clears_primary_code():
     assert intent.parameters.get("__semantic_indicator_label") == "inflation"
 
 
-def test_fallback_skips_restamp_when_no_provider_switch():
-    # Fallback served the SAME provider the intent already names — nothing to
-    # restamp, and the resolved code must survive untouched.
+def test_fallback_excludes_the_failed_primary_provider():
+    # An inherited candidate list must never retry the failed primary source.
     served = [_series(source="FRED", indicator="Inflation", series_id="CPIAUCSL")]
     svc = _fallback_service(served)
     svc._get_fallback_providers = Mock(return_value=["FRED"])
@@ -103,7 +105,11 @@ def test_fallback_skips_restamp_when_no_provider_switch():
         originalQuery="US inflation",
     )
 
-    run(svc._try_with_fallback(intent, Exception("primary failed")))
+    primary = Exception("primary failed")
+    with pytest.raises(Exception) as failure:
+        run(svc._try_with_fallback(intent, primary))
+    assert failure.value is primary
+    svc._fetch_data.assert_not_awaited()
 
     assert intent.apiProvider == "FRED"
     assert intent.parameters.get("indicator") == "CPIAUCSL"

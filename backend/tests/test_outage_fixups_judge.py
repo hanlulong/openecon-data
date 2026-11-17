@@ -12,7 +12,7 @@ Contract pinned here:
   ACCEPT, and only a "match" at confidence >= MATCH_CONFIDENCE_THRESHOLD.
   "mismatch" / "uncertain" / low confidence reject (a no-verdict primary then
   ends in the honest outage answer); an UNAVAILABLE judge (None: no LLM,
-  failure, timeout, too little request time) keeps the keyword decision;
+  failure, timeout, too little request time) refuses the unjudged candidate;
 - the judge goes through the parse path's reasoning-model handling
   (structured_completion_kwargs), is bounded by a fixed cap clamped by the
   request budget, and skips an open local-LLM circuit;
@@ -203,10 +203,10 @@ def test_threshold_match_is_accepted(service):
     assert result
 
 
-def test_unavailable_judge_keeps_the_keyword_acceptance(service):
-    result = _run_fallback(service, _trade_intent(), ProviderUnavailable("down"),
-                           AsyncMock(return_value=[_series()]), AsyncMock(return_value=None))
-    assert result and result[0].metadata.seriesId == "TX.VAL.TECH.MF.ZS"
+def test_unavailable_judge_refuses_the_unjudged_candidate(service):
+    with pytest.raises(ProviderUnavailable):
+        _run_fallback(service, _trade_intent(), ProviderUnavailable("down"),
+                      AsyncMock(return_value=[_series()]), AsyncMock(return_value=None))
 
 
 def test_keyword_rejection_never_reaches_the_judge(service):
@@ -279,7 +279,7 @@ def test_deadline_skipped_judge_refuses_the_fallback(service, clock):
 
 def test_deadline_skip_is_a_reject_but_llm_unavailability_is_not(service, clock):
     """_judge_fallback_match: False when only the deadline prevented judging;
-    None (keyword decision stands) only when the LLM itself is unavailable."""
+    None only when the LLM itself is unavailable; the caller refuses either."""
     unavailable = AsyncMock(return_value=None)
     with patch.object(query_module, "_smj_judge_fallback_result", new=unavailable):
         async def _judge_with(total):
@@ -367,7 +367,7 @@ class _SlowInstructor:
         return _judgment("mismatch", 0.99)
 
 
-def test_a_slow_real_judge_is_cut_off_and_keeps_the_keyword_decision(service, monkeypatch):
+def test_a_slow_real_judge_is_cut_off_and_refuses_the_unjudged_candidate(service, monkeypatch):
     """The REAL judge over a slow model: bounded by the cap, then unavailable."""
     monkeypatch.setattr(smj, "FALLBACK_JUDGE_TIMEOUT_SECONDS", 0.3)
     monkeypatch.setattr(smj, "MIN_JUDGE_SECONDS", 0.05)
@@ -377,12 +377,12 @@ def test_a_slow_real_judge_is_cut_off_and_keeps_the_keyword_decision(service, mo
         settings=SimpleNamespace(llm_provider="vllm"),
     )
     started = time.perf_counter()
-    result = _run_fallback(service, _trade_intent(), ProviderUnavailable("down"),
-                           AsyncMock(return_value=[_series()]), smj.judge_fallback_result)
+    with pytest.raises(ProviderUnavailable):
+        _run_fallback(service, _trade_intent(), ProviderUnavailable("down"),
+                      AsyncMock(return_value=[_series()]), smj.judge_fallback_result)
     elapsed = time.perf_counter() - started
     assert slow.calls == 1
     assert elapsed < 3.0
-    assert result  # unavailable judge -> keyword gate's acceptance stands
 
 
 def test_no_verdict_primary_with_a_rejected_fallback_ends_in_the_outage_answer(service):

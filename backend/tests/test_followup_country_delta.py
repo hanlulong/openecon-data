@@ -882,6 +882,7 @@ class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
         svc._effective_original_query = Mock(return_value="compare with Canada")
         svc._looks_like_provider_indicator_code = Mock(return_value=False)
         svc._is_fallback_relevant = Mock(return_value=True)
+        svc._judge_fallback_match = AsyncMock(return_value=True)
         svc._fetch_data = AsyncMock(return_value=served)
         run(svc._try_with_fallback(intent, DataNotAvailableError("FRED has no Canada series")))  # pylint: disable=protected-access
         fb_intent = svc._fetch_data.call_args.args[0]
