@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from backend.models import Metadata, NormalizedData, ParsedIntent
-from backend.services.conversation_state_v2 import ConversationState
+from backend.services.conversation_state_v2 import ConversationState, FollowUpDelta, materialize_intent, merge_state
 from backend.services.query import QueryService
 from backend.tests.utils import run
 
@@ -117,7 +117,7 @@ def test_fallback_excludes_the_failed_primary_provider():
 
 # ─── (ii) persist-time namespace guard ──────────────────────────────
 
-def test_persist_drops_code_on_provider_mismatch():
+def test_persist_uses_verified_singleton_code_on_provider_mismatch():
     svc = QueryService.__new__(QueryService)
     state = ConversationState(indicator="inflation", provider="FRED", country="US", turn_number=1)
     # Intent still says FRED + a FRED code, but the data came from World Bank
@@ -136,7 +136,8 @@ def test_persist_drops_code_on_provider_mismatch():
     # Provider follows the data; the FRED code is NOT persisted under WORLDBANK.
     assert state.provider == "WORLDBANK"
     assert state.routed_provider == "WORLDBANK"
-    assert state.resolved_indicator_code is None
+    assert state.resolved_indicator_code == "FP.CPI.TOTL.ZG"
+    assert state.last_indicators_resolved == ["FP.CPI.TOTL.ZG"]
 
 
 def test_persist_keeps_code_when_provider_consistent():
@@ -156,3 +157,53 @@ def test_persist_keeps_code_when_provider_consistent():
     assert state.provider == "FRED"
     assert state.resolved_indicator_code == "CPIAUCSL"
     assert state.last_indicators_resolved == ["CPIAUCSL"]
+
+
+def test_restamped_fallback_persists_returned_code_for_next_time_followup():
+    svc = QueryService.__new__(QueryService)
+    state = ConversationState(indicator="GDP", provider="WORLDBANK", country="France", resolved_indicator_code="GDP")
+    intent = ParsedIntent(apiProvider="IMF", indicators=["GDP"], clarificationNeeded=False,
+                          parameters={"__semantic_indicator_label": "GDP", "startDate": "2000-01-01",
+                                      "endDate": "2015-12-31", "__time_scope_authority": "user"})
+    data = [_series(source="IMF", indicator="GDP, current prices", series_id="NGDPD", country="France")]
+    svc._persist_verified_conversation_state("conv-fallback-gdp", state, data, intent=intent)
+    assert state.resolved_indicator_code == "NGDPD"
+    assert state.provider == "IMF"
+    assert state.indicator == "GDP"
+    updated = merge_state(state, FollowUpDelta(changed_start_date="2020-01-01", changed_end_date="2026-11-17", delta_type="time_change"))
+    next_intent = materialize_intent(updated)
+    assert next_intent.parameters["indicator"] == "NGDPD"
+    assert next_intent.parameters["startDate"] == "2020-01-01"
+
+
+def test_consistent_execution_keeps_transformation_missing_from_metadata():
+    svc = QueryService.__new__(QueryService)
+    state = ConversationState(indicator="CPI inflation", provider="FRED", country="US")
+    intent = ParsedIntent(apiProvider="FRED", indicators=["CPIAUCSL:pc1"], clarificationNeeded=False,
+                          parameters={"indicator": "CPIAUCSL:pc1"})
+    svc._persist_verified_conversation_state("conv-transformed", state,
+        [_series(source="FRED", indicator="Consumer prices", series_id="CPIAUCSL")], intent=intent)
+    assert state.resolved_indicator_code == "CPIAUCSL:pc1"
+
+
+def test_restamped_fallback_without_native_identifier_discards_previous_code():
+    svc = QueryService.__new__(QueryService)
+    state = ConversationState(indicator="GDP", provider="WORLDBANK", resolved_indicator_code="NY.GDP.MKTP.CD")
+    intent = ParsedIntent(apiProvider="IMF", indicators=["GDP"], parameters={}, clarificationNeeded=False)
+    svc._persist_verified_conversation_state("conv-no-native-id", state,
+        [_series(source="IMF", indicator="GDP", series_id="")], intent=intent)
+    assert state.provider == "IMF"
+    assert state.resolved_indicator_code is None
+    assert state.last_indicators_resolved is None
+
+
+@pytest.mark.parametrize("series_ids,title", [(["FP.CPI.TOTL.ZG", "NY.GDP.MKTP.CD"], "Inflation"), ([""], "Inflation"), ([""], "GDP")])
+def test_ambiguous_or_empty_returned_identity_clears_foreign_state(series_ids, title):
+    svc = QueryService.__new__(QueryService)
+    state = ConversationState(indicator="inflation", provider="FRED", resolved_indicator_code="CPIAUCSL", last_indicators_resolved=["CPIAUCSL"])
+    intent = ParsedIntent(apiProvider="FRED", indicators=["CPIAUCSL"], clarificationNeeded=False,
+                          parameters={"indicator": "CPIAUCSL"})
+    data = [_series(source="World Bank", indicator=title, series_id=code) for code in series_ids]
+    svc._persist_verified_conversation_state("conv-no-single-code", state, data, intent=intent)
+    assert state.resolved_indicator_code is None
+    assert state.last_indicators_resolved is None

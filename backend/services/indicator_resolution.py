@@ -2481,6 +2481,16 @@ def indicator_resolution_threshold(indicator_query: str, resolved_source: str) -
 # Plausibility checks
 # ---------------------------------------------------------------------------
 
+def has_semantic_resolution_authority(params: dict) -> bool:
+    """Whether this intent already carries an adjudicated indicator decision."""
+    authority = str(params.get("__semantic_authority") or "")
+    return authority in {"llm_adjudication", "post_fetch_semantic_judge", "exact_user_input"} or (
+        authority == "verified_conversation_state"
+        and bool(params.get("__delta_resolved"))
+        and not bool(params.get("__delta_indicator_changed"))
+    )
+
+
 def is_resolved_indicator_plausible(
     svc: Any,
     provider: str,
@@ -2938,7 +2948,8 @@ async def resolve_indicator_for_fetch(
 
         merged = {**params, "indicator": indicator_value, **extra}
         # Request-level selection authority is minted ONLY by the caller that
-        # freshly adjudicated a confident pick (passing it in ``extra``). Every
+        # freshly adjudicated a confident pick, or preserves that unchanged
+        # request's pick (passing it in ``extra``). Every
         # other resolution branch — a non-authoritative selection, a carried-over
         # state code, a re-adjudication — must not inherit a stale authority key
         # from a previous turn's params, or a later gate could wrongly trust it.
@@ -3144,18 +3155,9 @@ async def resolve_indicator_for_fetch(
     # verified on the turn that resolved it, so re-resolving it against the
     # bare follow-up text ("what about France") needlessly discards the
     # established Eurostat/StatsCan/IMF code.
-    _verified_state_authority = (
-        existing_semantic_authority == "verified_conversation_state"
-        and bool(params.get("__delta_resolved"))
-        and not bool(params.get("__delta_indicator_changed"))
-    )
     if (
         has_explicit_code
-        and (
-            existing_semantic_authority
-            in {"llm_adjudication", "post_fetch_semantic_judge", "exact_user_input"}
-            or _verified_state_authority
-        )
+        and has_semantic_resolution_authority(params)
         and not is_placeholder_indicator_code(existing_indicator)
     ):
         # Do not let deterministic semantic plausibility rules overrule or
@@ -3165,6 +3167,24 @@ async def resolve_indicator_for_fetch(
         # Downstream fetch/verification may still fail closed, but rule code
         # must not make the semantic accept/reject decision here or remap the
         # selected product.
+        from .indicator_selector import FREQUENCY_MISMATCH_PARAM
+
+        same_decision_provenance: Dict[str, Any] = {}
+        if existing_semantic_authority == "llm_adjudication":
+            mismatch = params.get(FREQUENCY_MISMATCH_PARAM)
+            if isinstance(mismatch, dict) and mismatch:
+                same_decision_provenance[FREQUENCY_MISMATCH_PARAM] = dict(mismatch)
+            if (
+                not mismatch
+                and not params.get("_prefetch_option_validation")
+                and not params.get("_uncertain_recovery_attempted")
+                and str(params.get("__authoritative_pick_code") or "").strip().upper() == existing_indicator.upper()
+                and _normalize_provider_name(str(params.get("__authoritative_pick_provider") or "")) == _normalize_provider_name(provider)
+            ):
+                same_decision_provenance.update(
+                    __authoritative_pick_code=existing_indicator,
+                    __authoritative_pick_provider=provider,
+                )
         params = _apply_indicator_with_semantic_label(
             existing_indicator,
             __semantic_authority=existing_semantic_authority,
@@ -3177,6 +3197,7 @@ async def resolve_indicator_for_fetch(
                 if existing_semantic_authority in {"llm_adjudication", "exact_user_input"}
                 else {}
             ),
+            **same_decision_provenance,
         )
         intent.parameters = params
         return params

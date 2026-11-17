@@ -45,6 +45,7 @@ from ..services.relevance_scorer import (
     specific_cues_compatible as _specific_cues_compatible,
 )
 from ..services.indicator_resolution import (
+    has_semantic_resolution_authority as _has_semantic_resolution_authority,
     is_comparison_query as _is_comparison_query_standalone,
     is_exact_match_locked as _is_exact_match_locked,
     is_placeholder_indicator_code as _is_placeholder_indicator_code,
@@ -3224,12 +3225,12 @@ async def build_prefetch_indicator_choice_clarification(
     )
     if (
         current_indicator_is_provider_code
-        and _is_resolved_indicator_plausible(
-            qs,
-            provider,
-            indicator_query,
-            current_indicator,
-            current_indicator_name,
+        and not _is_placeholder_indicator_code(current_indicator)
+        and (
+            (not _is_judged_candidate_fetch(params) and _has_semantic_resolution_authority(params))
+            or _is_resolved_indicator_plausible(
+                qs, provider, indicator_query, current_indicator, current_indicator_name,
+            )
         )
     ):
         return None
@@ -3310,15 +3311,18 @@ async def build_prefetch_indicator_choice_clarification(
             logger.debug("Prefetch selector unavailable for %s/%s: %s", provider, indicator_query, exc)
             selection = None
 
+        # A new selection replaces this request's previous pick authority,
+        # including when it asks, rejects, or fails to produce a usable code.
+        params.pop("__authoritative_pick_code", None)
+        params.pop("__authoritative_pick_provider", None)
+        intent.parameters = params
         if selection is not None and getattr(selection, "code", None):
             selection_code = str(getattr(selection, "code") or "").strip()
             selection_name = str(getattr(selection, "name", "") or "").strip()
-            if _is_resolved_indicator_plausible(
-                qs,
-                provider,
-                indicator_query,
-                selection_code,
-                selection_name,
+            if (
+                selection_code
+                and not _is_placeholder_indicator_code(selection_code)
+                and str(getattr(selection, "source", "") or "") == "llm_pick"
             ):
                 params["indicator"] = selection_code
                 # The CONCEPT, not indicator_query: that is retrieval text
@@ -3330,6 +3334,9 @@ async def build_prefetch_indicator_choice_clarification(
                 params["__semantic_indicator_label"] = concept_label or indicator_query
                 params["__semantic_authority"] = "llm_adjudication"
                 params["__decision_source"] = str(getattr(selection, "source", "") or "llm_pick")
+                if getattr(selection, "authoritative", False):
+                    params["__authoritative_pick_code"] = selection_code
+                    params["__authoritative_pick_provider"] = provider
                 # Same pick provenance as the main resolution seam (kept
                 # frequency-only-conflict annotation -> post-fetch disclosure);
                 # a stale annotation from an earlier code never survives.
@@ -3869,7 +3876,7 @@ def _selection_authority_holds(
 
       (a) the selection stage stamped an authoritative pick THIS request
           (``__authoritative_pick_code`` is minted in
-          indicator_resolution.resolve_indicator_for_fetch ONLY for a
+          indicator_resolution.resolve_indicator_for_fetch or prefetch ONLY for a
           SelectionResult.authoritative pick: source=llm_pick, made WITHOUT the
           prefer_ask score-ambiguity bias);
       (b) the TOP served series IS that pick — same provider AND provider-native
@@ -3885,8 +3892,9 @@ def _selection_authority_holds(
 
     Two consumers, each with its own narrow contract:
 
-    * needs_indicator_clarification's near-tie branch: authority relaxes that
-      single soft ASK. It NEVER suppresses a wrong-data / wrong-member /
+    * needs_indicator_clarification's soft score branches: authority relaxes a
+      lexical ASK. Low scores additionally require every series to match the
+      pick and the complete known country scope. It NEVER suppresses a wrong-data / wrong-member /
       wrong-region refusal: those fire on earlier HARD branches of the gate,
       before the near-tie branch.
     * maybe_recover_from_uncertain_match: authority forbids a LEXICAL
@@ -4219,7 +4227,32 @@ def needs_indicator_clarification(
         and ("debt_service" in top_series_cues or "credit" in top_series_cues)
     ):
         return _gate_log(True, "public_debt_credit")
-    if (high_signal_query_cues & strict_cues) and not (high_signal_query_cues & top_series_cues) and top_score < 0.8:
+    authority_code = (
+        _selection_authority_holds(qs, intent, top_series)
+        if not _is_judged_candidate else None
+    )
+    strict_cue_low_score = bool(
+        (high_signal_query_cues & strict_cues)
+        and not (high_signal_query_cues & top_series_cues)
+        and top_score < 0.8
+    )
+    if authority_code and (strict_cue_low_score or top_score < 0.25):
+        picked_provider = normalize_provider_name(_gate_params["__authoritative_pick_provider"])
+        served_keys = [qs._extract_series_provider_and_code(series) for series in data]
+        same_pick = all(
+            normalize_provider_name(provider) == picked_provider
+            and str(code or "").strip().upper() == authority_code.upper()
+            for provider, code in served_keys
+        )
+        requested_countries = _option_scope_countries(qs, intent)
+        requested_scope = _iso2_scope(qs, requested_countries) if requested_countries else None
+        served_scope = _iso2_scope(qs, [
+            str(getattr(getattr(series, "metadata", None), "country", "") or "")
+            for series in data
+        ]) if same_pick and requested_scope else None
+        if same_pick and requested_scope and served_scope == requested_scope:
+            return _gate_log(False, "selection_authority_soft_score", {"picked_code": authority_code})
+    if strict_cue_low_score:
         return _gate_log(True, "strict_cue_low_score")
     if top_score < 0.25:
         return _gate_log(True, "low_top_score")
@@ -4230,16 +4263,15 @@ def needs_indicator_clarification(
                 _series_text_for_relevance(scored[1][1])
             )
             if top_series_cues != second_series_cues:
-                # This is the ONLY soft/close-comparator branch — a genuine
+                # A soft/close-comparator branch — a genuine
                 # near-tie between the top series and a sibling. Every HARD
-                # mismatch (concept, strict-cue, region, top_score < 0.25) has
+                # mismatch (concept, debt, region) has
                 # already returned above, so a confident, predicate-validated
                 # pick must not be re-questioned here merely because a sibling
                 # scored within the near-tie band: that is exactly the vLLM
                 # re-selection non-determinism that otherwise flips a good served
                 # pick to a clarification menu. Structurally gated to THIS pick's
                 # own served data (see _selection_authority_holds).
-                authority_code = _selection_authority_holds(qs, intent, top_series)
                 if authority_code:
                     return _gate_log(
                         False,

@@ -2626,14 +2626,16 @@ class QueryService:
         if namespace_mismatch:
             logger.info(
                 "Namespace mismatch on persist: identifiers resolved under %s but "
-                "data served by %s; leaving resolved code/indicators unset so the "
-                "next turn re-resolves in the serving provider's namespace.",
+                "data served by %s; discarding foreign identifiers before "
+                "binding any verified singleton identity.",
                 code_namespace_provider, data_derived_provider,
             )
+            state.resolved_indicator_code = None
+            state.last_indicators_resolved = None
 
         # Only carry resolved identifiers forward when they belong to the
-        # serving provider's namespace. On a mismatch, leave them so the next
-        # turn re-resolves cleanly rather than sending a foreign code.
+        # serving provider's namespace. A verified singleton below can repair
+        # a mismatch without sending the failed provider's code on the next turn.
         if intent is not None and intent.indicators and not namespace_mismatch:
             state.last_indicators_resolved = list(intent.indicators)
         # After a FRED non-U.S. country-scope discovery, ``indicator`` is still
@@ -2645,6 +2647,19 @@ class QueryService:
         resolved_indicator = str(params.get("indicator") or "").strip()
         if resolved_indicator and not namespace_mismatch:
             state.resolved_indicator_code = resolved_indicator
+        elif data and len(data) == 1:
+            # A successful fallback clears the failed provider's code from
+            # intent params. Bind the verified singleton's actual identity,
+            # rather than retaining the prefetch state's raw/foreign token.
+            # Keep an existing consistent execution code above: it can carry
+            # transformations or dimensions absent from metadata.seriesId.
+            state.resolved_indicator_code = None
+            state.last_indicators_resolved = None
+            served_provider, _ = self._extract_series_provider_and_code(data[0])
+            native_code = str(getattr(data[0].metadata, "seriesId", "") or "").strip()
+            if served_provider and native_code and not self._is_placeholder_indicator_code(native_code):
+                state.resolved_indicator_code = native_code
+                state.last_indicators_resolved = [native_code]
 
         provider_name = data_derived_provider
         if not provider_name:
@@ -3206,7 +3221,9 @@ class QueryService:
         shared_label_key = collective_indicator_label.lower()
         collective_window = materialize_time_scope(state, delta)
 
-        for member in target_members:
+        async def resolve_member(member: Any) -> tuple[
+            List[NormalizedData], Optional[str], Optional[tuple[ParsedIntent, Exception]]
+        ]:
             member_query = self._collective_member_query(
                 member,
                 collective_indicator_label,
@@ -3287,9 +3304,7 @@ class QueryService:
                 )
                 member_data = await _recover_member_with_fallback(exc)
                 if not member_data:
-                    member_failures.append((member_intent, exc))
-                    failed_members.append(member_scope)
-                    continue
+                    return [], member_scope, (member_intent, exc)
 
             if not member_data:
                 member_data = await _recover_member_with_fallback(
@@ -3298,8 +3313,7 @@ class QueryService:
                     )
                 )
                 if not member_data:
-                    failed_members.append(member_scope)
-                    continue
+                    return [], member_scope, None
 
             unfiltered_data = member_data
             member_data = _df_enforce_user_time_window(
@@ -3309,11 +3323,9 @@ class QueryService:
             )
             if not member_data:
                 latest = max((point.date for series in unfiltered_data for point in series.data), default="")
-                member_failures.append((member_intent, DataNotAvailableError(
+                return [], member_scope, (member_intent, DataNotAvailableError(
                     f"no_data_in_requested_window latest_available={latest}"
-                )))
-                failed_members.append(member_scope)
-                continue
+                ))
             member_data = self._rerank_data_by_query_relevance(member_query, member_data)
             if self._is_ranking_query(member_query):
                 member_data = self._apply_ranking_projection(member_query, member_data)
@@ -3334,8 +3346,7 @@ class QueryService:
                         member_intent.apiProvider,
                         verification_error,
                     )
-                    failed_members.append(member_scope)
-                    continue
+                    return [], member_scope, None
 
             if delta.changed_indicator and collective_indicator_label:
                 returned_provider_key = normalize_provider_name(
@@ -3355,7 +3366,32 @@ class QueryService:
                         next(iter(returned_codes)),
                     )
 
+            return member_data, None, None
+
+
+        if not delta.changed_indicator and len(target_members) > 1:
+            member_slots = asyncio.Semaphore(4)
+
+            async def resolve_bounded(member: Any):
+                async with member_slots:
+                    return await resolve_member(member)
+
+            async with asyncio.TaskGroup() as group:
+                tasks = [group.create_task(resolve_bounded(member)) for member in target_members]
+            # TaskGroup suppresses a child's own CancelledError. Reading every
+            # result propagates it before any incomplete collection can commit.
+            outcomes = [task.result() for task in tasks]
+        else:
+            # Indicator changes share a previously judged provider code, so
+            # they retain their sequential resolution dependency.
+            outcomes = [await resolve_member(member) for member in target_members]
+
+        for member_data, failed_scope, failure in outcomes:
             combined_data.extend(member_data)
+            if failed_scope:
+                failed_members.append(failed_scope)
+            if failure:
+                member_failures.append(failure)
 
         if failed_members:
             for failed_intent, failure in member_failures:

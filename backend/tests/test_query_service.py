@@ -72,6 +72,19 @@ def sample_series_with(
     return series
 
 
+def sample_import_share_series(country: str) -> NormalizedData:
+    series = sample_series_with(
+        source="World Bank",
+        indicator="Imports of goods and services (% of GDP)",
+        series_id="NE.IMP.GNFS.ZS",
+        country=country,
+        unit="Percent of GDP",
+    )
+    series.metadata.frequency = "annual"
+    series.data = [series.data[0].model_copy(update={"value": 15.0})]
+    return series
+
+
 class QueryServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         cache_service.clear()
@@ -84,37 +97,48 @@ class QueryServiceTests(unittest.TestCase):
         self.service._judge_fallback_match = AsyncMock(return_value=True)
 
     def test_process_query_returns_data(self) -> None:
+        """An adjudicated native code reaches the provider and returns its data."""
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["GDP"],
-            parameters={"seriesId": "GDP"},
+            parameters={"seriesId": "GDP", "indicator": "GDP", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
         )
+        series = sample_series_with(indicator="Gross Domestic Product")
 
-        with patch.object(self.service.openrouter, "parse_query", return_value=intent):
-            with patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()):
-                response = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+        with patch.object(self.service.fred_provider, "fetch_series", return_value=series) as fetch_mock:
+            response = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
+        fetch_mock.assert_awaited_once()
+        self.assertEqual(fetch_mock.call_args.args[0]["indicator"], "GDP")
         self.assertEqual(len(response), 1)
-        self.assertEqual(response[0].metadata.indicator, "Real GDP")
+        self.assertEqual(response[0].metadata.indicator, "Gross Domestic Product")
 
     def test_cache_hit_skips_fetch(self) -> None:
+        from backend.services.redis_cache import RedisCacheService
+
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["GDP"],
-            parameters={"seriesId": "GDP"},
+            parameters={"seriesId": "GDP", "indicator": "GDP", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
         )
 
-        first_series = sample_series()
-        with patch.object(self.service.fred_provider, "fetch_series", return_value=first_series):
-            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
-            self.assertEqual(data[0].metadata.seriesId, "GDP")
+        first_series = sample_series_with(indicator="Gross Domestic Product")
+        # Isolate both real in-memory cache layers; the global Redis service's
+        # own fallback cache otherwise survives cache_service.clear().
+        redis_cache = RedisCacheService()
+        with patch("backend.services.query.get_redis_cache", new=AsyncMock(return_value=redis_cache)):
+            with patch.object(self.service.fred_provider, "fetch_series", return_value=first_series) as fetch_mock:
+                data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+                self.assertEqual(data[0].metadata.seriesId, "GDP")
+            fetch_mock.assert_awaited_once()
 
-        with patch.object(self.service.fred_provider, "fetch_series", side_effect=AssertionError("Should not refetch")):
-            cached = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            with patch.object(self.service.fred_provider, "fetch_series", side_effect=AssertionError("Should not refetch")):
+                cached = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertEqual(cached[0].metadata.indicator, "Real GDP")
+        self.assertEqual(cached[0].metadata.indicator, "Gross Domestic Product")
+        self.assertEqual(cached[0].data, first_series.data)
 
     def test_fred_non_us_country_scope_uses_country_aware_search(self) -> None:
         intent = ParsedIntent(
@@ -446,6 +470,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(selected, "imports as % of GDP")
 
     def test_worldbank_multi_indicator_collapses_to_resolved_code_after_override(self) -> None:
+        """A model-corrected single concept replaces duplicate wrong parse labels."""
         intent = ParsedIntent(
             apiProvider="World Bank",
             indicators=[
@@ -457,27 +482,39 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="import share of gdp China and US",
         )
 
+        selection = SelectionResult(
+            code="NE.IMP.GNFS.ZS",
+            name="Imports of goods and services (% of GDP)",
+            source="llm_pick",
+        )
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
+             patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as selector, \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_import_share_series("China"), sample_import_share_series("US")]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
+        selector.assert_awaited_once()
+        self.assertIn("import", selector.await_args.args[0].lower())
+        self.assertNotIn("PSD", selector.await_args.args[0])
         self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
-        self.assertTrue(fetch_mock.called)
+        self.assertEqual(intent.parameters["__semantic_authority"], "llm_adjudication")
+        self.assertEqual(fetch_mock.call_args.kwargs["indicator"], "NE.IMP.GNFS.ZS")
 
     def test_worldbank_fetch_prefers_resolved_indicator_param(self) -> None:
         intent = ParsedIntent(
             apiProvider="World Bank",
             indicators=["Import Share of GDP"],
-            parameters={"countries": ["China", "US"], "indicator": "NE.IMP.GNFS.ZS"},
+            parameters={"countries": ["China", "US"], "indicator": "NE.IMP.GNFS.ZS", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
             originalQuery="import share of gdp China and US",
         )
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
+             patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(side_effect=AssertionError("Adjudicated code must not be reselected"))) as selector, \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_import_share_series("China"), sample_import_share_series("US")]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
+        selector.assert_not_awaited()
 
     def test_bis_fetch_prefers_resolved_indicator_param(self) -> None:
         intent = ParsedIntent(
@@ -3836,12 +3873,17 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["imports share of gdp"],
-            parameters={"country": "CN"},
+            parameters={
+                "country": "CN", "indicator": "NE.IMP.GNFS.ZS",
+                "__semantic_indicator_label": "imports share of gdp",
+                "__semantic_authority": "llm_adjudication",
+            },
             clarificationNeeded=False,
             originalQuery="imports share of gdp in china",
         )
 
-        with patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("options should not be collected")):
+        with patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("options should not be collected")), \
+             patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(side_effect=AssertionError("Strong primary must not be reselected"))) as selector:
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-strong-primary",
@@ -3854,13 +3896,10 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(clarification)
+        selector.assert_not_awaited()
 
     def test_build_prefetch_indicator_choice_clarification_accepts_age_variant_for_large_country_sets(self) -> None:
-        """Age-demographic variant resolved indicator is accepted without clarification.
-
-        The LLM handles semantic refinement (age group selection); the router
-        no longer penalises age-demographic mismatches in plausibility checks.
-        """
+        """A model-adjudicated total employment measure needs no extra menu."""
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],
@@ -3869,7 +3908,13 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="compare employment rate across G20 member countries",
         )
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
+        selection = SelectionResult(
+            code="SL.EMP.TOTL.SP.ZS",
+            name="Employment to population ratio, 15+, total (%) (modeled ILO estimate)",
+            source="llm_pick",
+        )
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as selector, \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("Accepted primary needs no options")):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-large-country-set",
@@ -3881,8 +3926,10 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        # With age-demographic penalty removed, the resolved indicator is accepted.
         self.assertIsNone(clarification)
+        selector.assert_awaited_once()
+        self.assertEqual(intent.parameters["indicator"], "SL.EMP.TOTL.SP.ZS")
+        self.assertEqual(intent.parameters["__semantic_authority"], "llm_adjudication")
 
     def test_collect_indicator_choice_options_accepts_age_variant_candidates(self) -> None:
         """Age-demographic variant indicators are now accepted as plausible.
@@ -5853,7 +5900,12 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="compare employment rate across G20 member countries",
         )
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
+        selection = SelectionResult(
+            source="llm_reject",
+            rejection_reason="Youth employment is a subset, not the requested total employment rate.",
+        )
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as selector, \
+             patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-no-reliable-match",
@@ -5865,9 +5917,13 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        # With age-demographic penalty removed, the resolved indicator is now
-        # considered plausible — no clarification is triggered.
-        self.assertIsNone(clarification)
+        selector.assert_awaited_once()
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIsNone(clarification.data)
+        self.assertIsNone(intent.parameters.get("__semantic_authority"))
+        self.assertIsNone(intent.parameters.get("indicator"))
 
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
@@ -8650,11 +8706,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(payload[1].provider, "WORLDBANK")
 
     def test_prefetch_indicator_clarification_accepts_age_variant_without_filter(self) -> None:
-        """Age-demographic variant is accepted; no clarification triggered.
-
-        The LLM handles semantic refinement; the plausibility check no longer
-        penalises age-demographic mismatches.
-        """
+        """An accepted total-employment selection does not enter option filtering."""
         conv_id = "conv-process-prefetch-filter"
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -8664,7 +8716,14 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="compare employment rate across G20 member countries",
         )
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
+        selection = SelectionResult(
+            code="SL.EMP.TOTL.SP.ZS",
+            name="Employment to population ratio, 15+, total (%) (modeled ILO estimate)",
+            source="llm_pick",
+        )
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as selector, \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", new=AsyncMock(side_effect=AssertionError("Accepted primary needs no option filtering"))) as option_filter, \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("Accepted primary needs no options")):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -8677,13 +8736,13 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(response)
+        selector.assert_awaited_once()
+        option_filter.assert_not_awaited()
+        self.assertEqual(intent.parameters["indicator"], "SL.EMP.TOTL.SP.ZS")
+        self.assertEqual(intent.parameters["__semantic_authority"], "llm_adjudication")
 
     def test_prefetch_indicator_clarification_accepts_age_variant_without_fallback(self) -> None:
-        """Age-demographic variant is now accepted as plausible; no clarification triggered.
-
-        The LLM handles variant refinement; the plausibility check no longer
-        penalises age-demographic mismatches.
-        """
+        """An accepted total-employment selection does not search fallback providers."""
         conv_id = "conv-process-prefetch-fallback-options"
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -8693,7 +8752,14 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="compare employment rate across G20 member countries",
         )
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
+        selection = SelectionResult(
+            code="SL.EMP.TOTL.SP.ZS",
+            name="Employment to population ratio, 15+, total (%) (modeled ILO estimate)",
+            source="llm_pick",
+        )
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as selector, \
+             patch.object(self.service, "_get_fallback_providers", side_effect=AssertionError("Accepted primary needs no fallback")) as fallback, \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("Accepted primary needs no options")):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -8705,8 +8771,11 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        # With age-demographic penalty removed, the resolved indicator is accepted.
         self.assertIsNone(response)
+        selector.assert_awaited_once()
+        fallback.assert_not_called()
+        self.assertEqual(intent.parameters["indicator"], "SL.EMP.TOTL.SP.ZS")
+        self.assertEqual(intent.parameters["__semantic_authority"], "llm_adjudication")
 
     def test_try_resolve_pending_indicator_choice_drops_failed_option_from_retry_list(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-drop-failed")
