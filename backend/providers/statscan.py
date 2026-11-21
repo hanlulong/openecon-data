@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import csv
 import io
 import logging
@@ -19,7 +19,7 @@ from ..services.statscan_http import get_statscan_http_client
 from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
 from ..utils.geographies import canonicalize_canadian_region
-from ..utils.retry import DataNotAvailableError
+from ..utils.retry import DataNotAvailableError, ProviderUnavailable, ResultVerificationUnavailable, variant_retry_allowed
 from ..services.rate_limiter import record_provider_success
 from .base import BaseProvider, admit_provider_request, record_rate_limited_response
 
@@ -262,11 +262,18 @@ class StatsCanProvider(BaseProvider):
     def provider_name(self) -> str:
         return "StatsCan"
 
-    def __init__(self, metadata_search_service=None, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        metadata_search_service=None,
+        timeout: float = 30.0,
+        *,
+        semantic_coordinate_selector: Optional[Callable[..., Awaitable[Optional[list[int]]]]] = None,
+    ) -> None:
         super().__init__(timeout=timeout)
         settings = get_settings()
         self.base_url = settings.statscan_base_url.rstrip("/")
         self.metadata_search = metadata_search_service  # Optional: for intelligent indicator discovery
+        self.semantic_coordinate_selector = semantic_coordinate_selector
         self._statscan_metadata_service = get_statscan_metadata_service()
         self._cube_metadata_cache: Dict[str, Dict[str, Any]] = {}
         # UOM description per vector (from getSeriesInfoFromVector + codeset),
@@ -1306,6 +1313,10 @@ class StatsCanProvider(BaseProvider):
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
+            if status_code in {401, 403}:
+                raise ProviderUnavailable(
+                    f"Statistics Canada refused access while {context} (HTTP {status_code})"
+                ) from exc
             if status_code == 429:
                 raise DataNotAvailableError(
                     f"Statistics Canada API rate limit exceeded while {context}. "
@@ -1620,10 +1631,12 @@ class StatsCanProvider(BaseProvider):
             response = await self._post_with_retry(
                 client,
                 f"{self.base_url}/getCubeMetadata",
+                raise_on_status=False,
                 json=[{"productId": normalized_product_id}],
                 headers={"Content-Type": "application/json"},
                 timeout=30.0
             )
+            self._raise_for_status_or_data_unavailable(response, f"fetching metadata for product {normalized_product_id}")
             payload = response.json()
 
             # Response is an array with status and object
@@ -1819,6 +1832,7 @@ class StatsCanProvider(BaseProvider):
         response = await self._post_with_retry(
             client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            raise_on_status=False,
             json=[{
                 "productId": int(product_id_str),  # Use normalized 8-digit product ID
                 "coordinate": coordinate,
@@ -1827,6 +1841,7 @@ class StatsCanProvider(BaseProvider):
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
+        self._raise_for_status_or_data_unavailable(response, f"fetching coordinate for product {product_id}")
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -1979,6 +1994,7 @@ class StatsCanProvider(BaseProvider):
         response = await self._post_with_retry(
             client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            raise_on_status=False,
             json=[{
                 "productId": product_id,
                 "coordinate": coordinate,
@@ -1987,6 +2003,7 @@ class StatsCanProvider(BaseProvider):
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
+        self._raise_for_status_or_data_unavailable(response, f"fetching coordinate for product {product_id}")
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -2845,6 +2862,12 @@ class StatsCanProvider(BaseProvider):
                         member["parentMemberId"] = parent
                 dim["member"].append(member)
 
+        native_coordinate_members = (
+            bool(dimensions)
+            and sorted(dimensions) == list(range(1, len(dimensions) + 1))
+            and len(dimensions) <= 10
+            and all(dim["dimensionNameEn"] and dim["member"] for dim in dimensions.values())
+        )
         if (not dimensions or any(not dim.get("member") for dim in dimensions.values())) and rows:
             dim_columns = [
                 col
@@ -2877,6 +2900,7 @@ class StatsCanProvider(BaseProvider):
 
         return {
             "_source": "full_table_csv",
+            "_native_coordinate_members": native_coordinate_members,
             "productId": self._normalize_metadata_product_id(product_id),
             "cubeTitleEn": title,
             "frequencyCode": self._frequency_code_from_text(frequency),
@@ -2948,7 +2972,8 @@ class StatsCanProvider(BaseProvider):
             response_content = bytes(content)
         else:
             # Test doubles and older clients may only expose get().
-            response = await self._get_with_retry(client, url, timeout=30.0, follow_redirects=True)
+            response = await self._get_with_retry(client, url, raise_on_status=False, timeout=30.0, follow_redirects=True)
+            self._raise_for_status_or_data_unavailable(response, f"downloading full-table CSV for product {normalized_product_id}")
             response_content = response.content
             if len(response_content) > self.FULL_TABLE_CSV_MAX_BYTES:
                 raise DataNotAvailableError(
@@ -3032,6 +3057,16 @@ class StatsCanProvider(BaseProvider):
         except ValueError:
             return None
 
+    @staticmethod
+    def _csv_coordinate_members(value: str) -> tuple[int, ...]:
+        parts = str(value or "").strip().split(".")
+        if len(parts) > 10 or any(not part.isascii() or not part.isdigit() for part in parts):
+            return ()
+        members = [int(part) for part in parts]
+        while members and members[-1] == 0:
+            members.pop()
+        return tuple(members)
+
     def _select_full_table_rows(
         self,
         rows: List[Dict[str, str]],
@@ -3041,6 +3076,7 @@ class StatsCanProvider(BaseProvider):
         geography: Optional[str],
         start_date: Optional[str],
         end_date: Optional[str],
+        requested_coordinate: Optional[str] = None,
     ) -> tuple[List[Dict[str, str]], str, Optional[str]]:
         if not rows:
             raise DataNotAvailableError("Statistics Canada full-table CSV contains no rows")
@@ -3081,6 +3117,14 @@ class StatsCanProvider(BaseProvider):
             )
             candidate_rows = [item["value"] for item in filtered_points]
 
+        if requested_coordinate is not None:
+            requested_members = self._csv_coordinate_members(requested_coordinate)
+            if not coordinate_key or not requested_members:
+                raise DataNotAvailableError("Statistics Canada CSV cannot identify the requested coordinate")
+            candidate_rows = [
+                row for row in candidate_rows
+                if self._csv_coordinate_members(row.get(coordinate_key, "")) == requested_members
+            ]
         if not candidate_rows:
             raise DataNotAvailableError("No data rows found in Statistics Canada full-table CSV")
 
@@ -3091,7 +3135,9 @@ class StatsCanProvider(BaseProvider):
         # not concept-to-code inference from query words.
         first_row = candidate_rows[0]
         selected_coordinate = str(first_row.get(series_key) or "").strip() if series_key else ""
-        if series_key and selected_coordinate:
+        if requested_coordinate is not None:
+            matching_rows = candidate_rows
+        elif series_key and selected_coordinate:
             matching_rows = [
                 row for row in candidate_rows
                 if str(row.get(series_key) or "").strip() == selected_coordinate
@@ -3126,6 +3172,7 @@ class StatsCanProvider(BaseProvider):
             geography=geography,
             start_date=start_date,
             end_date=end_date,
+            requested_coordinate=params.get("coordinate"),
         )
         periods = params.get("periods")
         if periods is not None:
@@ -3197,6 +3244,9 @@ class StatsCanProvider(BaseProvider):
         periods = params.get("periods", 240)
         start_date = params.get("startDate")
         end_date = params.get("endDate")
+        semantic_request = str(params.get("semanticRequest") or "").strip()
+        coordinate_selector = getattr(self, "semantic_coordinate_selector", None)
+        needs_semantic_coordinate = bool(semantic_request and coordinate_selector)
 
         # Validate geography if provided
         if geography:
@@ -3232,6 +3282,11 @@ class StatsCanProvider(BaseProvider):
                     )
             try:
                 metadata = await self._get_cube_metadata(exact_product_id)
+                if needs_semantic_coordinate:
+                    return await self._fetch_adjudicated_coordinate(
+                        exact_product_id, metadata, semantic_request, geography,
+                        periods=periods, start_date=start_date, end_date=end_date,
+                    )
                 if metadata.get("_source") == "full_table_csv" and not geography:
                     return await self.fetch_full_table_csv_data({
                         **params,
@@ -3251,6 +3306,8 @@ class StatsCanProvider(BaseProvider):
                     end_date=end_date,
                 )
             except Exception as exc:
+                if needs_semantic_coordinate:
+                    raise
                 logger.warning(
                     "Exact StatsCan product %s WDS coordinate path failed; trying full-table CSV fallback: %s",
                     exact_product_id,
@@ -3285,6 +3342,11 @@ class StatsCanProvider(BaseProvider):
 
                 # Fetch metadata to understand structure
                 metadata = await self._get_cube_metadata(product_id)
+                if needs_semantic_coordinate:
+                    return await self._fetch_adjudicated_coordinate(
+                        product_id, metadata, semantic_request, geography,
+                        periods=periods, start_date=start_date, end_date=end_date,
+                    )
 
                 # Determine which fetch method to use based on structure
                 dimensions = metadata.get("dimension", [])
@@ -3325,6 +3387,8 @@ class StatsCanProvider(BaseProvider):
                     return result
 
             except Exception as e:
+                if not variant_retry_allowed(e):
+                    raise
                 logger.warning(f"⚠️ Product {product_id} failed: {e}")
                 continue
 
@@ -3333,6 +3397,80 @@ class StatsCanProvider(BaseProvider):
             f"Unable to retrieve data for '{indicator}' from Statistics Canada. "
             f"All matching datasets failed. Try a different indicator or provider."
         )
+
+    async def _fetch_adjudicated_coordinate(
+        self,
+        product_id: str,
+        metadata: dict[str, Any],
+        request: str,
+        geography: Optional[str],
+        *,
+        periods: int,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> NormalizedData:
+        use_csv = metadata.get("_source") == "full_table_csv"
+        if use_csv and not metadata.get("_native_coordinate_members"):
+            raise ResultVerificationUnavailable("Statistics Canada CSV does not establish published coordinate members")
+        axes = []
+        resolved_geography = canonicalize_canadian_region(geography) or geography or "Canada"
+        if resolved_geography.upper() in {"CA", "CAN", "CANADA"}:
+            resolved_geography = "Canada"
+        for dimension in metadata.get("dimension") or []:
+            name = str(dimension.get("dimensionNameEn") or "").strip()
+            members = [
+                {"id": member["memberId"], "label": str(member["memberNameEn"])}
+                for member in dimension.get("member") or []
+                if isinstance(member.get("memberId"), int) and member.get("memberNameEn")
+            ]
+            if "geogr" in name.lower():
+                members = [m for m in members if m["label"].casefold() == resolved_geography.casefold()]
+            elif len(members) > 80:
+                # Rank a large axis by query overlap, retaining its published
+                # order for ties. The model still has to affirm a match.
+                words = set(re.findall(r"\w+", request.casefold()))
+                members.sort(key=lambda m: -len(words & set(re.findall(r"\w+", m["label"].casefold()))))
+                members = members[:80]
+            if not members:
+                self._raise_required_dimension(product_id, name)
+            axes.append({"name": name, "members": members})
+        if not axes:
+            raise DataNotAvailableError("No published dimensions found for the selected Statistics Canada table")
+
+        title = str(metadata.get("cubeTitleEn") or metadata.get("title") or "")
+        selection = await self.semantic_coordinate_selector(
+            request=request, cube_title=title,
+            frequency=str(metadata.get("frequency") or ""), axes=axes,
+        )
+        if selection is None or len(selection) != len(axes) or any(
+            not any(member["id"] == selected for member in axis["members"])
+            for selected, axis in zip(selection, axes)
+        ):
+            raise DataNotAvailableError("No Statistics Canada coordinate could be verified for the requested measure")
+
+        coordinate = self._build_wds_coordinate(selection)
+        labels = [
+            next(m["label"] for m in axis["members"] if m["id"] == selected)
+            for selected, axis in zip(selection, axes)
+        ]
+        member_description = ", ".join(f"{axis['name']}: {label}" for axis, label in zip(axes, labels))
+        fetch_coordinate = self.fetch_full_table_csv_data if use_csv else self.fetch_by_coordinate
+        result = await fetch_coordinate({
+            "productId": product_id,
+            "coordinate": coordinate,
+            "indicator": title or member_description,
+            **({"geography": resolved_geography} if use_csv else {}),
+            "periods": periods,
+            "startDate": start_date,
+            "endDate": end_date,
+        })
+        details = self._extract_detailed_metadata(metadata, coordinate)
+        result.metadata.description = ". ".join(filter(None, (title, member_description)))
+        result.metadata.country = resolved_geography
+        result.metadata.priceType = details.get("priceType")
+        result.metadata.seasonalAdjustment = details.get("seasonalAdjustment")
+        result.metadata.dataType = details.get("dataType")
+        return result
 
     async def fetch_from_product_with_discovery(
         self,

@@ -3149,6 +3149,23 @@ async def resolve_indicator_for_fetch(
         return params
 
     existing_semantic_authority = str(params.get("__semantic_authority") or "")
+    selected_native_identity = bool(
+        existing_indicator
+        and (
+            (existing_semantic_authority == "exact_user_input"
+             and params.get("__decision_source") == "user_choice")
+            or (
+                existing_semantic_authority == "llm_adjudication"
+                and str(params.get("__authoritative_pick_code") or "").casefold() == existing_indicator.casefold()
+                and _normalize_provider_name(str(params.get("__authoritative_pick_provider") or ""))
+                == _normalize_provider_name(provider)
+                and not params.get("_uncertain_recovery_attempted")
+                and existing_indicator.upper() not in {
+                    str(code).upper() for code in params.get("__exclude_indicator_codes") or []
+                }
+            )
+        )
+    )
     # A code carried from verified conversation state keeps final authority on
     # a country/time-only follow-up (same delta guard as the dispatch gate in
     # data_fetcher._has_provider_map_authority): it was already adjudicated and
@@ -3156,7 +3173,7 @@ async def resolve_indicator_for_fetch(
     # bare follow-up text ("what about France") needlessly discards the
     # established Eurostat/StatsCan/IMF code.
     if (
-        has_explicit_code
+        (has_explicit_code or selected_native_identity)
         and has_semantic_resolution_authority(params)
         and not is_placeholder_indicator_code(existing_indicator)
     ):

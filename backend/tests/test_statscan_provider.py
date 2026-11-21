@@ -1,8 +1,10 @@
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 
 from backend.providers.statscan import StatsCanProvider
-from backend.utils.retry import DataNotAvailableError
+from backend.utils.retry import DataNotAvailableError, ResultVerificationUnavailable
 
 
 class _FailingHttpClient:
@@ -506,6 +508,95 @@ async def test_exact_product_falls_back_to_full_table_csv_when_wds_metadata_time
     assert result.metadata.apiUrl.endswith('(direct full-table CSV fallback)')
     assert [point.date for point in result.data] == ['2000', '2001']
     assert [point.value for point in result.data] == [100.0, 98.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verified_mismatch", [False, True])
+async def test_dynamic_discovery_retries_only_after_a_coordinate_verdict(
+    monkeypatch, statscan_provider, verified_mismatch
+):
+    search = AsyncMock(return_value=[{"productId": "14100287"}, {"productId": "36100434"}])
+    cube_metadata = AsyncMock(return_value={})
+    fallback = object()
+    failure = (DataNotAvailableError("Cube does not contain the requested measure") if verified_mismatch
+               else ResultVerificationUnavailable("Could not verify cube member"))
+    select_coordinate = AsyncMock(side_effect=[failure, fallback])
+    monkeypatch.setattr(statscan_provider, "search_vectors", search)
+    monkeypatch.setattr(statscan_provider, "_get_cube_metadata", cube_metadata)
+    monkeypatch.setattr(statscan_provider, "semantic_coordinate_selector", AsyncMock(), raising=False)
+    monkeypatch.setattr(statscan_provider, "_fetch_adjudicated_coordinate", select_coordinate)
+
+    params = {"indicator": "Labour force", "semanticRequest": "Canada unemployment rate by sex"}
+    if verified_mismatch:
+        assert await statscan_provider.fetch_dynamic_data(params) is fallback
+        assert [call.args[0] for call in cube_metadata.await_args_list] == ["14100287", "36100434"]
+    else:
+        with pytest.raises(ResultVerificationUnavailable, match="Could not verify cube member"):
+            await statscan_provider.fetch_dynamic_data(params)
+        cube_metadata.assert_awaited_once_with("14100287")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_row_available", [True, False])
+async def test_semantic_cube_replays_published_csv_coordinate(
+    monkeypatch, statscan_provider, selected_row_available
+):
+    product_id = "36100434"
+    rows = [
+        {"REF_DATE": "2024", "GEO": "Canada", "COORDINATE": "1.20", "VALUE": "99", "UOM": "Percent"},
+        {"REF_DATE": "2024", "GEO": "Canada", "COORDINATE": "1.2.1", "VALUE": "88", "UOM": "Dollars"},
+    ]
+    if selected_row_available:
+        rows.extend([
+            {"REF_DATE": "2024", "GEO": "Canada", "COORDINATE": "1.2", "VALUE": "10", "UOM": "Dollars"},
+            {"REF_DATE": "2025", "GEO": "Canada", "COORDINATE": "1.2.0", "VALUE": "11", "UOM": "Dollars"},
+        ])
+    metadata_rows = [
+        ["Cube Title"], ["National accounts", product_id, "", "", "", "", "Annual", "2024", "2025"],
+        ["Dimension ID", "Dimension name"], ["1", "Geography"], ["2", "Estimates"],
+        ["Dimension ID", "Member Name", "Classification Code", "Member ID"],
+        ["1", "Canada", "", "1"], ["2", "Compensation of employees", "", "20"],
+        ["2", "Gross domestic product at market prices", "", "2"],
+    ]
+    metadata = statscan_provider._metadata_from_full_table_csv_rows(product_id, rows, metadata_rows)
+    statscan_provider._cube_metadata_cache[product_id] = metadata
+    monkeypatch.setattr(statscan_provider, "semantic_coordinate_selector", AsyncMock(return_value=[1, 2]))
+    monkeypatch.setattr(statscan_provider, "_get_full_table_csv_rows", AsyncMock(return_value=(rows, "https://example.test/cube.zip")))
+    wds_fetch = AsyncMock()
+    monkeypatch.setattr(statscan_provider, "fetch_by_coordinate", wds_fetch)
+
+    async def fetch():
+        return await statscan_provider._fetch_adjudicated_coordinate(
+            product_id, metadata, "Canada GDP", "Canada", periods=12, start_date="2024", end_date="2025",
+        )
+
+    if selected_row_available:
+        result = await fetch()
+        assert [point.value for point in result.data] == [10, 11]
+        assert result.metadata.seriesId == "36100434:1.2"
+        assert result.metadata.country == "Canada"
+        assert result.metadata.unit == "Dollars"
+        assert "Gross domestic product at market prices" in result.metadata.description
+    else:
+        with pytest.raises(DataNotAvailableError, match="No data rows"):
+            await fetch()
+    wds_fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_csv_synthetic_ordinals_cannot_authorize_semantic_coordinate(monkeypatch, statscan_provider):
+    product_id = "36100434"
+    rows = [{"GEO": "Canada", "Estimates": "GDP", "COORDINATE": "2.9", "VALUE": "10"}]
+    metadata = statscan_provider._metadata_from_full_table_csv_rows(product_id, rows, [])
+    adjudicate = AsyncMock()
+    monkeypatch.setattr(statscan_provider, "semantic_coordinate_selector", adjudicate)
+
+    with pytest.raises(ResultVerificationUnavailable, match="published coordinate"):
+        await statscan_provider._fetch_adjudicated_coordinate(
+            product_id, metadata, "Canada GDP", "Canada", periods=12, start_date=None, end_date=None,
+        )
+
+    adjudicate.assert_not_awaited()
 
 
 @pytest.mark.asyncio

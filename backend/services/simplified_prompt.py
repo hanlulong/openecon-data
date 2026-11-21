@@ -101,8 +101,8 @@ Important constraints:
 - Select apiProvider using the PROVIDER CAPABILITIES section below.
   Backend may refine explicit provider, structural coverage, or country context;
   choose the best-fit provider for the query.
-- Do not invent indicator codes. Indicator arrays must contain plain-language metric names copied from the user's
-  intent, never provider-native IDs/codes unless the user explicitly supplied that exact code.
+- Do not invent indicator codes. Indicator arrays contain every requested plain-language metric; never provider-native IDs/codes unless the user explicitly supplied that exact code.
+  If measures have different modifiers, add parameters.indicatorSpecs in the same order: [{{"label": "metric", "frequency": null, "provider": null, "series_id": null}}], with only explicitly requested per-measure constraints.
 - parameters.seriesId: ONE provider-native code the user literally typed, copied verbatim (several: list them
   in indicators); never a description, null for concepts, never a code the user rejects ("CPILFESL, not CPIAUCSL" -> "CPILFESL").
 - parameters.metric (crypto only, else null): price|market_cap|volume|price_change = the measure the user WANTS,

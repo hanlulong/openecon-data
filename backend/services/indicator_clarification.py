@@ -67,7 +67,13 @@ from ..utils.processing_steps import (
     reset_processing_tracker,
 )
 from ..utils.retry import DataNotAvailableError, is_provider_unavailable, retry_async
-from .semantic_match_judge import decide_prefetch_outcome
+from .semantic_match_judge import (
+    MATCH_CONFIDENCE_THRESHOLD,
+    bounded_judge_timeout,
+    decide_prefetch_outcome,
+    judge_fallback_result,
+    judgment_accepts,
+)
 from .user_messages import get_message, reply_hint_language
 
 if TYPE_CHECKING:
@@ -330,6 +336,10 @@ def store_pending_indicator_options(
         "question_lines": [str(line) for line in (question_lines or []) if str(line).strip()],
         # Reply-turn chrome renders in the language that built this menu.
         "language": clarification_language(intent),
+        "verified_options": {
+            option: _option_validation_snapshots(intent)[option]
+            for option in clean_options if option in _option_validation_snapshots(intent)
+        },
     }
     try:
         conversation_manager.set_pending_indicator_options(conversation_id, payload)
@@ -905,6 +915,7 @@ async def try_resolve_pending_indicator_choice(
     if not intent:
         conversation_manager.clear_pending_indicator_options(conversation_id)
         return None
+    _option_validation_snapshots(intent).update(pending.get("verified_options") or {})
 
     conversation_id = conversation_manager.add_message_safe(conversation_id, "user", query)
 
@@ -974,29 +985,49 @@ async def try_resolve_pending_indicator_choice(
             tracker=tracker,
         )
 
+    expected_snapshot = (pending.get("verified_options") or {}).get(selected_option)
+    identity_matches = _selected_native_identity_matches(selected_option, data)
+    scope_matches = _indicator_option_country_scope(intent, data)
+    if identity_matches is False or scope_matches is False or (
+        expected_snapshot and _option_result_snapshot(data) != expected_snapshot
+    ):
+        return build_failed_indicator_choice_response(
+            qs=qs, conversation_id=conversation_id, query=original_query or query,
+            intent=intent, options=options, selected_option=selected_option,
+            question_lines=pending.get("question_lines") or [], tracker=tracker,
+            error="The returned series did not preserve the verified indicator choice.",
+        )
+    if identity_matches is None or scope_matches is None:
+        return _unverified_indicator_choice_response(conversation_id, intent, tracker)
+    if not expected_snapshot:
+        timeout = bounded_judge_timeout()
+        label = _OPTION_TRAILING_PARENS_RE.sub("", _OPTION_PROVIDER_PREFIX_RE.sub("", selected_option)).strip()
+        judgment = None
+        if timeout is not None:
+            try:
+                judgment = await judge_fallback_result(
+                    qs, original_indicators=[label], fallback_result=data,
+                    original_concept=label,
+                    original_query=json.dumps({"original_request": original_query or query,
+                                               "selected_indicator": label,
+                                               "scope": intent.parameters}, ensure_ascii=False),
+                    timeout_s=timeout,
+                )
+            except Exception:
+                pass
+        if not judgment_accepts(judgment):
+            if judgment and judgment.decision == "mismatch" and judgment.confidence >= MATCH_CONFIDENCE_THRESHOLD:
+                return build_failed_indicator_choice_response(
+                    qs=qs, conversation_id=conversation_id, query=original_query or query,
+                    intent=intent, options=options, selected_option=selected_option,
+                    question_lines=pending.get("question_lines") or [], tracker=tracker,
+                    error="The returned data did not match the selected indicator.",
+                )
+            return _unverified_indicator_choice_response(conversation_id, intent, tracker)
+
     data = qs._rerank_data_by_query_relevance(intent.originalQuery or query, data)
     if qs._is_ranking_query(intent.originalQuery or query):
         data = qs._apply_ranking_projection(intent.originalQuery or query, data)
-
-    recovered_data = await maybe_recover_from_uncertain_match(
-        qs,
-        intent.originalQuery or query,
-        intent,
-        data,
-    )
-    if recovered_data:
-        data = recovered_data
-
-    clarification_response = build_uncertain_result_clarification(
-        qs=qs,
-        conversation_id=conversation_id,
-        query=intent.originalQuery or query,
-        intent=intent,
-        data=data,
-        processing_steps=tracker.to_list() if tracker else None,
-    )
-    if clarification_response:
-        return clarification_response
 
     conversation_id = conversation_manager.add_message_safe(
         conversation_id,
@@ -1268,6 +1299,8 @@ def apply_indicator_option_to_intent(intent: ParsedIntent, option_text: str) -> 
         return False
 
     provider_name, code = parsed
+    semantic_label = str((intent.parameters or {}).get("__semantic_indicator_label")
+                         or " ".join(intent.indicators or [])).strip()
     intent.apiProvider = provider_name
     intent.indicators = [code]
     intent.clarificationNeeded = False
@@ -1278,6 +1311,13 @@ def apply_indicator_option_to_intent(intent: ParsedIntent, option_text: str) -> 
     params.pop("series_id", None)
     params.pop("code", None)
     params["indicator"] = code
+    if _option_validation_snapshots(intent).get(option_text):
+        params.update({
+            "__semantic_authority": "llm_adjudication", "__decision_source": "llm_pick",
+            "__authoritative_pick_code": code, "__authoritative_pick_provider": provider_name,
+        })
+        if semantic_label:
+            params["__semantic_indicator_label"] = semantic_label
     intent.parameters = params
     return True
 
@@ -1380,6 +1420,165 @@ def build_no_reliable_indicator_match_response(
 _PROVIDER_OPTION_LABELS = provider_option_labels()
 
 
+def _option_validation_evidence(intent: ParsedIntent) -> Dict[tuple[str, str], str]:
+    """Keep candidate verdicts within this execution, outside serialized intent."""
+    context = str(getattr(intent, "originalQuery", "") or "")
+    evidence = getattr(intent, "_indicator_option_validation", None)
+    if not isinstance(evidence, dict) or evidence.get("context") != context:
+        evidence = {"context": context, "verdicts": {}}
+        intent._indicator_option_validation = evidence
+    return evidence["verdicts"]
+
+
+def _option_validation_snapshots(intent: ParsedIntent) -> Dict[str, Any]:
+    _option_validation_evidence(intent)
+    return intent._indicator_option_validation.setdefault("snapshots", {})
+
+
+def _option_result_snapshot(data: List[NormalizedData]) -> List[Dict[str, str]]:
+    rows = []
+    for series in data:
+        metadata = series.metadata
+        row = {
+            key: str(getattr(metadata, key, None) or "").strip().casefold()
+            for key in ("seriesId", "frequency", "unit", "seasonalAdjustment", "priceType", "dataType")
+        }
+        row["source"] = normalize_provider_name(metadata.source)
+        row["country"] = (CountryResolver.normalize(str(metadata.country or ""))
+                          or canonical_aggregate_region(str(metadata.country or ""))
+                          or str(metadata.country or "").strip().casefold())
+        rows.append(row)
+    return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
+
+
+def _indicator_option_country_scope(intent: ParsedIntent, data: List[NormalizedData]) -> Optional[bool]:
+    from ..utils.jurisdictions import ambiguous_country_alias
+
+    def identity(value: Any, returned: bool = False) -> Optional[str]:
+        text = str(value or "")
+        if returned and ambiguous_country_alias(text):
+            return None
+        return canonical_aggregate_region(text) or CountryResolver.normalize(text)
+
+    requested = list((intent.parameters or {}).get("countries") or [])
+    if not requested and (intent.parameters or {}).get("country"):
+        requested = [(intent.parameters or {})["country"]]
+    if not requested:
+        return True
+    expected = {identity(value) for value in requested}
+    actual = {identity(series.metadata.country, returned=True) for series in data}
+    if None in expected or None in actual:
+        return None
+    return actual == expected
+
+
+def _unverified_indicator_choice_response(conversation_id: str, intent: ParsedIntent,
+                                          tracker: Optional[ProcessingTracker]) -> QueryResponse:
+    return QueryResponse(
+        conversationId=conversation_id, intent=intent, clarificationNeeded=False,
+        error="verification_unavailable",
+        message=_chrome("clarify_options_unverified", clarification_language(intent),
+                        "I could not verify reliable indicator choices right now. "
+                        "This does not mean the data is unavailable. Please try again."),
+        processingSteps=tracker.to_list() if tracker else None,
+    )
+
+
+def _selected_native_identity_matches(option: str, data: List[NormalizedData]) -> Optional[bool]:
+    selected = parse_indicator_option(option)
+    if not selected or not data:
+        return None
+    provider, code = selected
+    for series in data:
+        actual_provider = normalize_provider_name(series.metadata.source)
+        actual_code = str(series.metadata.seriesId or "").strip()
+        if not actual_provider or not actual_code:
+            return None
+        if actual_provider != provider:
+            return False
+        if provider == "FRED" and ":" in code:
+            from ..providers.fred import fred_units_transform
+
+            base, transform = code.split(":", 1)
+            if not fred_units_transform(transform):
+                return None
+            if actual_code.casefold() != base.casefold():
+                return False
+        elif provider == "STATSCAN" and re.fullmatch(r"\d{8}(?:\d{2})?", code) and ":" in actual_code:
+            from ..providers.statscan import StatsCanProvider
+
+            product, coordinate = actual_code.split(":", 1)
+            if not (
+                re.fullmatch(r"[0-9]{8}(?:[0-9]{2})?", product)
+                and StatsCanProvider._csv_coordinate_members(coordinate)
+            ):
+                return None
+            normalize = StatsCanProvider._normalize_metadata_product_id
+            if normalize(product) != normalize(code):
+                return False
+        elif actual_code.casefold() != code.casefold():
+            return False
+    return True
+
+
+def _executed_indicator_option(qs: Any, requested_option: str, data: List[NormalizedData]) -> Optional[str]:
+    """Describe a single replayable identity using every actual returned row."""
+    identities = {
+        (normalize_provider_name(series.metadata.source), str(series.metadata.seriesId or "").strip())
+        for series in data
+    }
+    if len(identities) != 1:
+        return None
+    provider, code = next(iter(identities))
+    if not provider or not code or _is_placeholder_indicator_code(code):
+        return None
+    # A table coordinate is meaningful, but current option transport cannot
+    # replay it. Preserve existing exact table/vector paths elsewhere.
+    if provider == "STATSCAN" and ":" in code:
+        return None
+    requested = parse_indicator_option(requested_option)
+    if requested and requested[0] == "FRED" and ":" in requested[1]:
+        from ..providers.fred import fred_units_transform
+
+        base, transform = requested[1].split(":", 1)
+        transform = fred_units_transform(transform)
+        if provider != "FRED" or base.casefold() != code.casefold() or not transform:
+            return None
+        code = f"{code}:{transform}"
+    metadata = data[0].metadata
+    fields = ("indicator", "frequency", "unit", "seasonalAdjustment", "priceType", "dataType")
+    if any(len({str(getattr(row.metadata, field, None) or "").strip().casefold()
+                for row in data}) > 1 for field in fields):
+        return None
+    label = str(metadata.indicator or "").strip()
+    if not label:
+        return None
+    details = []
+    for field in ("frequency", "unit", "seasonalAdjustment", "priceType"):
+        value = str(getattr(metadata, field, None) or "").strip()
+        if value and value.casefold() not in label.casefold() and value not in details:
+            details.append(value)
+    if details:
+        label += f" — {'; '.join(details)}"
+    option = f"[{_PROVIDER_OPTION_LABELS.get(provider, provider)}] {label} ({code})"
+    return option if dedupe_indicator_choice_options(qs, [option]) else None
+
+
+def _without_rejected_indicator_options(intent: ParsedIntent, options: List[str]) -> List[str]:
+    evidence = _option_validation_evidence(intent)
+    replacements = intent._indicator_option_validation.get("replacements", {})
+    kept = []
+    for option in options:
+        option = replacements.get(option, option)
+        parsed = parse_indicator_option(option)
+        key = (parsed[0], str(parsed[1]).strip().upper()) if parsed else None
+        if key and str(evidence.get(key, "")).startswith("substantive:"):
+            continue
+        if option not in kept:
+            kept.append(option)
+    return kept
+
+
 def collect_indicator_choice_options(
     qs: Any,
     query: str,
@@ -1466,7 +1665,8 @@ def collect_indicator_choice_options(
             continue
         provider_candidates.append(normalized)
 
-    from .indicator_selector import IndicatorSelector
+    from .indicator_selector import IndicatorSelector, build_canonical_arm_kwargs
+    from .provider_strategy import country_qualified_indicator_text, region_qualified_indicator_text
 
     selector = IndicatorSelector()
     scored_options: List[tuple[float, str, str]] = []
@@ -1487,11 +1687,29 @@ def collect_indicator_choice_options(
         ):
             continue
 
+        retrieval_intent = intent.model_copy(deep=True)
+        if len(target_countries) == 1:
+            retrieval_intent.parameters["country"] = target_country
+        provider_query = country_qualified_indicator_text(
+            retrieval_intent, provider_name, indicator_query
+        )
+        provider_query = region_qualified_indicator_text(
+            retrieval_intent, provider_name, provider_query,
+        )
+        canonical_kwargs = build_canonical_arm_kwargs(
+            retrieval_intent, provider_query, target_country
+        )
+        retrieval_kwargs = {}
+        if canonical_kwargs.get("english_terms"):
+            retrieval_kwargs["english_query"] = canonical_kwargs["english_terms"]
+        if raw_query and raw_query != provider_query:
+            retrieval_kwargs["constraint_query"] = raw_query
         try:
             candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
-                indicator_query,
+                provider_query,
                 provider_name,
                 top_k=max(max_options * 3, 8),
+                **retrieval_kwargs,
             )
         except Exception as exc:
             logger.debug(
@@ -1618,7 +1836,7 @@ def collect_indicator_choice_options(
         )
     raw_options = [option for _, option, _ in scored_options]
     deduped_options = dedupe_indicator_choice_options(qs, raw_options)
-    return deduped_options[:max_options]
+    return _without_rejected_indicator_options(intent, deduped_options)[:max_options]
 
 
 async def collect_statscan_selector_choice_options(
@@ -2931,13 +3149,43 @@ async def _validate_indicator_choice_option(
         candidate_data = qs._apply_ranking_projection(query, candidate_data)
     if not candidate_data:
         return None, "substantive:irrelevant_after_rerank"
-    if qs._has_implausible_top_series(query, candidate_data):
-        return None, "substantive:implausible"
     region = str(getattr(intent, "subnationalRegion", "") or "").strip()
     if region and not qs._served_data_references_region(candidate_data, region):
         return None, "substantive:region_not_covered"
-    if qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="failed_choice_candidate"):
-        return None, "substantive:gate_uncertain"
+
+    scope_matches = _indicator_option_country_scope(intent, candidate_data)
+    if scope_matches is None:
+        return None, "transient:scope_unverified"
+    if scope_matches is False:
+        return None, "substantive:country_not_covered"
+
+    # A fetch proves executability, not meaning. In particular, headline CPI,
+    # core CPI and an index level can all fetch while answering different
+    # questions. Candidate validation has no inherited selection authority:
+    # only a fresh affirmative model judgment can approve the actual series.
+    timeout = bounded_judge_timeout()
+    if timeout is None:
+        return None, "transient:judge_deadline"
+    try:
+        judgment = await judge_fallback_result(
+            qs,
+            original_indicators=list(intent.indicators or []),
+            fallback_result=candidate_data,
+            original_query=query or intent.originalQuery,
+            original_concept=(intent.parameters or {}).get("__semantic_indicator_label"),
+            timeout_s=timeout,
+        )
+    except Exception:
+        return None, "transient:judge_unavailable"
+    if judgment is None:
+        return None, "transient:judge_unavailable"
+    if not judgment_accepts(judgment):
+        reason = (
+            "substantive:semantic_mismatch"
+            if judgment.decision == "mismatch" and judgment.confidence >= MATCH_CONFIDENCE_THRESHOLD
+            else "transient:semantic_uncertain"
+        )
+        return None, reason
 
     return candidate_data, "viable"
 
@@ -2962,12 +3210,50 @@ async def filter_viable_indicator_choice_options(
         qs,
         [str(option) for option in (options or []) if str(option).strip()],
     )
-    if len(clean_options) < 2:
-        return clean_options[:max_options]
+    if not clean_options:
+        return []
 
     viable_options: List[str] = []
     validated: Dict[str, List[NormalizedData]] = {}
     dropped: Dict[str, str] = {}
+    verdicts: Dict[str, str] = {}
+    identity_options: Dict[tuple[str, str], str] = {}
+    origins: Dict[str, List[str]] = {}
+    conflicting_identities: set[tuple[str, str]] = set()
+
+    def record_validated(option_text: str, data: List[NormalizedData]) -> bool:
+        actual_option = _executed_indicator_option(qs, option_text, data)
+        if actual_option is None:
+            dropped[option_text] = "transient:identity_unverified"
+            return False
+        actual = parse_indicator_option(actual_option)
+        key = (actual[0], actual[1].upper())
+        snapshot = _option_result_snapshot(data)
+        existing = identity_options.get(key)
+        if key in conflicting_identities or (
+            existing and _option_validation_snapshots(intent).get(existing) != snapshot
+        ):
+            conflicting_identities.add(key)
+            for original in [option_text, *origins.get(existing, [])]:
+                dropped[original] = "transient:identity_conflict"
+                verdicts.pop(original, None)
+                intent._indicator_option_validation.get("replacements", {}).pop(original, None)
+            if existing in viable_options:
+                viable_options.remove(existing)
+                validated.pop(existing, None)
+            return False
+        actual_option = existing or actual_option
+        identity_options[key] = actual_option
+        origins.setdefault(actual_option, []).append(option_text)
+        if actual_option not in validated:
+            viable_options.append(actual_option)
+        validated[actual_option] = data
+        _option_validation_snapshots(intent)[actual_option] = snapshot
+        intent._indicator_option_validation.setdefault("replacements", {})[option_text] = actual_option
+        requested, actual = parse_indicator_option(option_text), parse_indicator_option(actual_option)
+        verdicts[option_text] = "viable" if requested == actual else "substantive:identity_replaced"
+        dropped.pop(option_text, None)
+        return True
     tracker_token = None
     if get_processing_tracker() is not None:
         tracker_token = activate_processing_tracker(None)  # type: ignore[arg-type]
@@ -2980,8 +3266,7 @@ async def filter_viable_indicator_choice_options(
             if data is None:
                 dropped[option_text] = reason
                 continue
-            validated[option_text] = data
-            viable_options.append(option_text)
+            record_validated(option_text, data)
             if len(viable_options) >= max_options:
                 break
 
@@ -2998,9 +3283,7 @@ async def filter_viable_indicator_choice_options(
                     qs, query, intent, option_text
                 )
                 if data is not None:
-                    validated[option_text] = data
-                    viable_options.append(option_text)
-                    dropped.pop(option_text, None)
+                    record_validated(option_text, data)
                 else:
                     dropped[option_text] = f"{retry_reason} (retried)"
     finally:
@@ -3010,6 +3293,11 @@ async def filter_viable_indicator_choice_options(
     if collector is not None:
         collector["validated"] = validated
         collector["dropped"] = dropped
+    evidence = _option_validation_evidence(intent)
+    for option_text, reason in {**dropped, **verdicts, **{option: "viable" for option in validated}}.items():
+        parsed = parse_indicator_option(option_text)
+        if parsed:
+            evidence[(parsed[0], str(parsed[1]).strip().upper())] = reason
     return viable_options
 
 
@@ -3463,7 +3751,7 @@ async def build_prefetch_indicator_choice_clarification(
 
     target_countries = qs._collect_target_countries(intent.parameters)
     should_skip_viability_prefetch = len(target_countries) > 8
-    if len(options) >= 2 and not should_skip_viability_prefetch:
+    if options and not should_skip_viability_prefetch:
         _viability_evidence: Dict[str, Any] = {}
         viable_options = await qs._filter_viable_indicator_choice_options(
             query=query_text or indicator_query,
@@ -3516,6 +3804,32 @@ async def build_prefetch_indicator_choice_clarification(
                     }, ensure_ascii=False),
                 )
                 return None
+
+        # Never resurrect a definitive semantic rejection simply because a
+        # different option was unverified or temporarily unavailable. An
+        # unjudged menu would turn a transport/LLM failure into user authority.
+        if len(viable_options) < 2:
+            if any(
+                str(reason).startswith("transient:")
+                for reason in (_viability_evidence.get("dropped") or {}).values()
+            ):
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    intent=intent,
+                    clarificationNeeded=False,
+                    error="verification_unavailable",
+                    message=_chrome(
+                        "clarify_options_unverified", lang,
+                        "I could not verify reliable indicator choices right now. "
+                        "This does not mean the data is unavailable. Please try again.",
+                    ),
+                    processingSteps=processing_steps,
+                )
+            return build_no_reliable_indicator_match_response(
+                conversation_id=conversation_id, intent=intent,
+                query=query_text or indicator_query, qs=qs,
+                processing_steps=processing_steps,
+            )
 
     top_option = parse_indicator_option(options[0]) if options else None
     top_matches_primary = bool(
@@ -4394,7 +4708,9 @@ def build_uncertain_result_clarification(
             current_option = f"[{current_provider}] {current_name} ({current_code})"
             options.insert(0, current_option)
 
-    options = dedupe_indicator_choice_options(qs, options)
+    options = _without_rejected_indicator_options(
+        intent, dedupe_indicator_choice_options(qs, options)
+    )
     mismatch_hint = build_indicator_mismatch_hint(query, top_series)
     directional_conflict = _has_directional_conflict(high_signal_query_cues, top_series_cues)
     severe_mismatch = bool(mismatch_hint) and (directional_conflict or top_score < 0.25)
@@ -4452,6 +4768,7 @@ def build_uncertain_result_clarification(
                 qs,
                 [served_option, *options] if served_first else [*options, served_option],
             )
+    options = _without_rejected_indicator_options(intent, options)
     distinct_options: set[tuple[str, str]] = set()
     for option in options:
         parsed = parse_indicator_option(option)
@@ -4655,6 +4972,7 @@ def build_no_data_indicator_clarification(
     )
 
     def _without_attempted(raw: List[str]) -> List[str]:
+        raw = _without_rejected_indicator_options(intent, raw)
         if not attempted_key[0] or not attempted_key[1]:
             return raw
         kept: List[str] = []

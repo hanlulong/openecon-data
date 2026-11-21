@@ -10,7 +10,7 @@ import re
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from pydantic import ValidationError
 
@@ -24,12 +24,14 @@ from ..models import (
     ParsedIntent,
     QueryResponse,
     UnservedIndicator,
+    indicator_specs_from_intent,
 )
 from ..config import Settings
 from ..services.cache import cache_service
 from ..services.redis_cache import get_redis_cache
 from ..services.conversation import conversation_manager
 from ..services.conversation_state_v2 import (
+    build_measure_continuity,
     extract_state_from_intent,
     materialize_intent,
     materialize_time_scope,
@@ -49,8 +51,10 @@ from ..routing.unified_router import (
     route_provider as unified_route_provider,
     correct_coingecko_misrouting as unified_correct_coingecko_misrouting,
 )
-from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
+from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult, is_multi_indicator_intent
 from ..routing.country_resolver import CountryResolver
+from .geographic_identity import apply_geographic_entity, has_geographic_collision, resolve_geographic_identity
+from ..utils.jurisdictions import ambiguous_country_alias, geographic_name_collisions
 from ..routing.unified_router import UnifiedRouter
 from ..providers.fred import FREDProvider
 from ..providers.worldbank import WorldBankProvider
@@ -73,6 +77,7 @@ from ..utils.retry import (
     DataNotAvailableError,
     ProviderCoolingDown,
     RequestBudgetExhausted,
+    ResultVerificationUnavailable,
     is_no_verdict,
     retry_async,
     variant_retry_allowed,
@@ -138,6 +143,8 @@ from ..services.semantic_match_judge import (
     judge_fallback_result as _smj_judge_fallback_result,
     judge_resolved_indicator as _smj_judge_resolved_indicator,
     judgment_accepts as _smj_judgment_accepts,
+    select_cube_coordinate as _smj_select_cube_coordinate,
+    verify_followup_measure as _smj_verify_followup_measure,
 )
 from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
@@ -451,7 +458,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-11-17.1"
+    CACHE_KEY_VERSION = "2026-11-21.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -479,7 +486,10 @@ class QueryService:
         self.fred_provider = FREDProvider(fred_key)
         self.world_bank_provider = WorldBankProvider(metadata_search_service=metadata_search)
         self.comtrade_provider = ComtradeProvider(comtrade_key)
-        self.statscan_provider = StatsCanProvider(metadata_search_service=metadata_search)
+        self.statscan_provider = StatsCanProvider(
+            metadata_search_service=metadata_search,
+            semantic_coordinate_selector=self._select_statscan_coordinate,
+        )
         self.imf_provider = IMFProvider(metadata_search_service=metadata_search)
         self.bis_provider = BISProvider(metadata_search_service=metadata_search)
         self.eurostat_provider = EurostatProvider(metadata_search_service=metadata_search)
@@ -506,6 +516,9 @@ class QueryService:
         self._fallback_provider_cache: "OrderedDict[Tuple[str, Tuple[str, ...]], List[str]]" = OrderedDict()
         # Shared parse/routing/validation stages used by multiple execution paths.
         self.pipeline = QueryPipeline(self)
+
+    async def _select_statscan_coordinate(self, **evidence) -> Optional[list[int]]:
+        return await _smj_select_cube_coordinate(self, **evidence)
 
     @staticmethod
     def _normalize_provider_alias(provider: Optional[str]) -> Optional[str]:
@@ -1307,6 +1320,8 @@ class QueryService:
         intent: Optional[ParsedIntent],
     ) -> Optional[List[NormalizedData]]:
         """Delegates to :func:`query_helpers.maybe_recover_from_empty_data`."""
+        if intent is not None and is_multi_indicator_intent(intent):
+            return None
         from .query_helpers import maybe_recover_from_empty_data as _qh_recover
         return await _qh_recover(self, query, intent)
 
@@ -1432,6 +1447,8 @@ class QueryService:
         data: List[NormalizedData],
     ) -> Optional[List[NormalizedData]]:
         """Delegates to :func:`indicator_clarification.maybe_recover_from_uncertain_match`."""
+        if intent is not None and is_multi_indicator_intent(intent):
+            return None
         return await _ic_maybe_recover_from_uncertain_match(self, query, intent, data)
 
     def _provider_supports_country_for_options(self, provider: str, country_iso2: Optional[str]) -> bool:
@@ -1899,6 +1916,8 @@ class QueryService:
                     )
             except Exception as fallback_exc:
                 logger.warning("Fallback after empty response failed: %s", fallback_exc)
+                if isinstance(fallback_exc, ResultVerificationUnavailable):
+                    fetch_error = fallback_exc
 
             # Semantic recovery re-phrases and RE-ROUTES the intent; after a
             # no-verdict fetch error it is skipped (variant_retry_allowed): the
@@ -1999,7 +2018,7 @@ class QueryService:
                 processingSteps=tracker.to_list() if tracker else None,
             )
 
-        data = self._rerank_data_by_query_relevance(query, data)
+        data = self._rerank_data_by_query_relevance(query, data, is_multi_indicator=validation.is_multi_indicator)
         data = self._apply_ranking_projection(query, data)
         coverage_warning = None
         if not skip_post_fetch_clarification:
@@ -2108,6 +2127,8 @@ class QueryService:
         Same last resort (and the same verification + state persistence) as
         _execute_standard_pipeline's; a stale cache read does no provider I/O.
         """
+        if is_multi_indicator_intent(intent):
+            return None  # A single cache key cannot establish each leg's provenance.
         try:
             stale_data = await self._get_stale_from_cache(
                 normalize_provider_name(intent.apiProvider), intent.parameters or {}
@@ -2162,10 +2183,19 @@ class QueryService:
         honestly instead of with "I couldn't find data ... choose the
         indicator you intended": the menu would claim a verdict nobody gave.
         """
+        if isinstance(attempt_error, ResultVerificationUnavailable):
+            return QueryResponse(
+                conversationId=conversation_id, intent=intent, clarificationNeeded=False,
+                error="verification_unavailable",
+                message=_localized_message("measure_verification_unavailable", getattr(intent, "language", None)),
+                processingSteps=processing_steps,
+            )
         if intent is not None and is_no_verdict(attempt_error):
             return self._build_provider_outage_response(
                 conversation_id, intent, attempt_error, processing_steps,
             )
+        if intent is not None and is_multi_indicator_intent(intent):
+            return None
         return _ic_build_no_data_indicator_clarification(
             self, conversation_id, query, intent, processing_steps, attempt_error=attempt_error,
         )
@@ -2359,6 +2389,7 @@ class QueryService:
             if str(item or "").strip()
         ))
         started = time.perf_counter()
+        prior_measure = (intent.parameters or {}).get("__measure_continuity")
         judgment = await _smj_judge_fallback_result(
             self,
             original_indicators=original_indicators,
@@ -2368,6 +2399,7 @@ class QueryService:
                 (intent.parameters or {}).get("__semantic_indicator_label") or semantic_query or None
             ),
             timeout_s=timeout_s,
+            **({"prior_measure": prior_measure} if prior_measure else {}),
         )
         latency = time.perf_counter() - started
         if judgment is None:
@@ -2564,7 +2596,9 @@ class QueryService:
         guarantee: once a response is accepted as the current answer, the
         durable conversation state must reflect the exact returned member set.
         """
-        if state is None:
+        if state is None or (
+            intent and data and self._subnational_country_conflict(intent, (series.metadata for series in data))
+        ):
             return
         params = (intent.parameters or {}) if intent is not None else {}
         # The initial state is extracted before fetch defaults are applied.
@@ -2668,8 +2702,10 @@ class QueryService:
             )
         if provider_name:
             state.provider = provider_name
-            state.routed_provider = provider_name
+            state.routed_provider = code_namespace_provider if code_namespace_provider == "EXCHANGERATE" else provider_name
         if data:
+            if intent is not None and params.get("__indicator_specs"):
+                state.requested_indicators = indicator_specs_from_intent(intent)
             update_answer_members_from_data(
                 state,
                 data,
@@ -2872,7 +2908,11 @@ class QueryService:
             or delta.removed_countries is not None
         )
 
-        active_scope_count = len(active_members)
+        if len(getattr(state, "requested_indicators", None) or []) > 1:
+            return False
+        active_scope_count = self._distinct_member_scope_count(active_members)
+        if active_scope_count < 2 and (geography_delta or not delta.changed_indicator):
+            return False
         if (
             delta.changed_indicator
             and not geography_delta
@@ -3168,6 +3208,10 @@ class QueryService:
         params["__delta_indicator_changed"] = indicator_changed
         if collective_indicator_label:
             params["__semantic_indicator_label"] = collective_indicator_label
+        if not delta.changed_indicator:
+            measure = build_measure_continuity(state, members=[member]) or getattr(state, "measure_continuity", None)
+            if measure:
+                params["__measure_continuity"] = measure
 
         indicator_token = (
             collective_indicator_label
@@ -3263,11 +3307,15 @@ class QueryService:
                 }
             member_countries = self._member_country_list(member)
             member_scope = ", ".join(member_countries) or str(getattr(member, "provider", "") or "member")
+            verification_failure = None
 
             async def _recover_member_with_fallback(primary_error: Exception) -> Optional[List[NormalizedData]]:
+                nonlocal verification_failure
                 try:
                     fallback_data = await self._try_with_fallback(member_intent, primary_error)
                 except Exception as fallback_exc:
+                    if isinstance(fallback_exc, ResultVerificationUnavailable):
+                        verification_failure = fallback_exc
                     logger.warning(
                         "Collective delta fallback failed for %s via %s: %s",
                         member_scope,
@@ -3304,7 +3352,7 @@ class QueryService:
                 )
                 member_data = await _recover_member_with_fallback(exc)
                 if not member_data:
-                    return [], member_scope, (member_intent, exc)
+                    return [], member_scope, (member_intent, verification_failure or exc)
 
             if not member_data:
                 member_data = await _recover_member_with_fallback(
@@ -3313,7 +3361,7 @@ class QueryService:
                     )
                 )
                 if not member_data:
-                    return [], member_scope, None
+                    return [], member_scope, (member_intent, verification_failure) if verification_failure else None
 
             unfiltered_data = member_data
             member_data = _df_enforce_user_time_window(
@@ -3395,6 +3443,11 @@ class QueryService:
 
         if failed_members:
             for failed_intent, failure in member_failures:
+                if isinstance(failure, ResultVerificationUnavailable):
+                    return self._build_no_data_indicator_clarification(
+                        conversation_id, query, failed_intent,
+                        tracker.to_list() if tracker else None, attempt_error=failure,
+                    )
                 if is_no_verdict(failure):
                     return self._build_provider_outage_response(
                         conversation_id, failed_intent, failure,
@@ -3875,6 +3928,8 @@ class QueryService:
         cache_params = self._build_cache_params(provider, params)
         stale = cache_service.get_data_stale(provider, cache_params)
         if stale and self._cached_result_has_complete_country_coverage(params, stale):
+            if await self._matches_retained_measure(params, stale) is not True:
+                return None
             logger.info(f"📦 Serving STALE cache for {provider} (provider may be down)")
             return stale
         if stale:
@@ -4489,6 +4544,8 @@ class QueryService:
         data: Optional[List[NormalizedData]],
     ) -> tuple[List[NormalizedData], Optional[str]]:
         """Delegates to :func:`query_helpers.maybe_improve_country_coverage`."""
+        if intent is not None and is_multi_indicator_intent(intent):
+            return data or [], None  # Coverage belongs to each independent measure.
         from .query_helpers import maybe_improve_country_coverage as _qh_coverage
         return await _qh_coverage(self, query, intent, data)
 
@@ -4692,6 +4749,13 @@ class QueryService:
         """
         primary_provider = normalize_provider_name(intent.apiProvider)
 
+        if isinstance(primary_error, ResultVerificationUnavailable):
+            raise primary_error
+        if is_multi_indicator_intent(intent):
+            # Each leg already handled recovery in its own scope. A fallback
+            # for the parent would reduce the request to its first measure.
+            raise primary_error
+
         if "no_data_in_requested_window" in str(primary_error or ""):
             # The user's time window is the constraint (future start, frozen
             # series): NO provider has observations in it. Falling back would
@@ -4752,7 +4816,7 @@ class QueryService:
             indicator, fallback_providers,
         )
 
-        last_error = primary_error
+        local_verification_failure = None
 
         # Build fallback intents upfront so we can try the top providers in parallel.
         def _build_fallback_intent(fallback_provider: str) -> ParsedIntent:
@@ -4805,6 +4869,7 @@ class QueryService:
             one, so its fetch is the request's final provider stage (retries
             need only fit before the answer reserve, not the retry reserve).
             """
+            nonlocal local_verification_failure
             logger.warning(f"Attempting fallback from {primary_provider} to {fallback_provider}")
             fb_intent = await asyncio.to_thread(_build_fallback_intent, fallback_provider)
             try:
@@ -4830,6 +4895,9 @@ class QueryService:
                     target_countries,
                     intent.originalQuery,
                 )
+            except ResultVerificationUnavailable as exc:
+                local_verification_failure = exc
+                return None
             except Exception as e:
                 logger.warning(f"Fallback to {fallback_provider} failed: {e}")
                 return None
@@ -4953,7 +5021,6 @@ class QueryService:
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.warning(f"Parallel fallback {top_two[i]} raised: {result}")
-                    last_error = result
                 elif result is not None:
                     return _serve(result)
 
@@ -4975,7 +5042,7 @@ class QueryService:
 
         # All fallbacks failed
         logger.error(f"All fallbacks failed for {primary_provider}")
-        raise primary_error  # Raise original error
+        raise local_verification_failure or primary_error
 
     @staticmethod
     def _render_clarification_text(response: QueryResponse) -> str:
@@ -5068,30 +5135,40 @@ class QueryService:
         so a stale partial outcome is never announced.
         """
         reports = _DF_MULTI_INDICATOR_FETCH_REPORTS.get() or []
-        if not reports or not response.data:
+        if not reports:
             return
         # Only a response that still answers a multi-indicator request can
         # have left an indicator out; a later single-indicator serve in the
         # same request is not a partial answer.
-        if response.intent is None or len(response.intent.indicators or []) < 2:
+        if response.intent is None or not is_multi_indicator_intent(response.intent):
             return
         # The served payload must come entirely from the partial fetch (a
         # subset: reranking/filtering may drop or reorder its series). If any
         # served series came from elsewhere, a later path changed what is
         # served and the report may be stale — stay silent (the per-series
         # metadata note remains) rather than announce a gap that was filled.
-        served = {_df_served_series_identity(series) for series in response.data}
+        served = {_df_served_series_identity(series) for series in response.data or []}
+        requested = [str(label).strip().casefold() for label in response.intent.indicators]
         report = next(
-            (item for item in reversed(reports) if served <= set(item.get("served") or ())),
+            (item for item in reversed(reports)
+             if served <= set(item.get("served") or ())
+             and (not item.get("requested") or requested == [
+                 str(spec.get("label") or "").strip().casefold() for spec in item["requested"]
+             ])),
             None,
         )
         unserved = list((report or {}).get("unserved") or [])
+        for leg in (report or {}).get("legs") or []:
+            if leg["served"] and not (served & leg["served"]):
+                unserved.append({"indicator": leg["spec"]["label"], "reason": "filtered_out"})
         if not unserved:
             return
         response.unservedIndicators = [
             UnservedIndicator(indicator=str(item["indicator"]), reason=str(item["reason"]))
             for item in unserved
         ]
+        if not response.data:
+            return  # The existing error text describes an entirely failed collection.
         language = getattr(response.intent, "language", None) if response.intent is not None else None
         note = _df_multi_indicator_partial_note(
             ", ".join(str(item["indicator"]) for item in unserved), language,
@@ -5115,7 +5192,7 @@ class QueryService:
                 return response
             if response.clarificationNeeded:
                 return _ic_finalize_clarification_response_contract(self, response)
-            if response.data and not (response.error or "").strip():
+            if response.data or response.error:
                 self._disclose_unserved_indicators(response)
         except Exception as exc:  # never let the contract break a response
             logger.warning(
@@ -5248,6 +5325,42 @@ class QueryService:
                     return True
         return False
 
+    def _subnational_country_conflict(
+        self, intent: ParsedIntent, series_metadata: Iterable[Any],
+    ) -> Optional[Tuple[str, str]]:
+        if not getattr(intent, "subnationalRegion", None):
+            return None
+        countries = {
+            self._normalize_country_to_iso2(country)
+            for country in self._collect_target_countries(intent.parameters)
+        }
+        if len(countries) != 1 or None in countries:
+            return None
+        parent = next(iter(countries))
+        assert parent is not None
+        for metadata in series_metadata:
+            label = str(getattr(metadata, "country", None) or "")
+            country = self._normalize_country_to_iso2(label)
+            # Some providers place subdivision labels in metadata.country.
+            if country and country != parent and not ambiguous_country_alias(label, country):
+                return parent, country
+        return None
+
+    def _reject_foreign_subnational_data(
+        self, response: QueryResponse, region: str, series_metadata: Iterable[Any],
+    ) -> bool:
+        conflict = self._subnational_country_conflict(response.intent, series_metadata)
+        if not conflict:
+            return False
+        parent, country = conflict
+        response.data = None
+        response.error = "subnational_data_unavailable"
+        response.message = _localized_message(
+            "subnational_country_mismatch", response.intent.language,
+            region=region, country=parent, returned=country,
+        )
+        return True
+
     def _enforce_subnational_fail_closed(self, response: QueryResponse) -> QueryResponse:
         """Fail closed when national data is served for a sub-country request (Proposal B).
 
@@ -5285,6 +5398,8 @@ class QueryService:
                 return response
             region = str(getattr(intent, "subnationalRegion", None) or "").strip()
             if not region:
+                return response
+            if self._reject_foreign_subnational_data(response, region, (series.metadata for series in response.data)):
                 return response
             provider = str(intent.apiProvider or "").strip().upper()
             params = intent.parameters or {}
@@ -5341,6 +5456,8 @@ class QueryService:
             coverage = getattr(response, "windowCoverage", None)
             fetched = tuple(getattr(coverage, "series_metadata", ()) or ())
             if not region or not fetched:
+                return response
+            if self._reject_foreign_subnational_data(response, region, fetched):
                 return response
             from types import SimpleNamespace as _NS
 
@@ -5494,6 +5611,7 @@ class QueryService:
             # after a clarification/no-data turn. Used only for a truthiness
             # check and the parse call below, both dict-safe.
             history = conversation_manager.get_messages(conv_id)
+            geographic_choice = None
 
             if normalize_provider_name(self._detect_explicit_provider(query) or "") == "IMF":
                 early_supportability_reason = imf_exact_provider_surface_supportability_reason(query)
@@ -5569,6 +5687,12 @@ class QueryService:
                     if isinstance(option, dict)
                 ]
                 selected_option = self._match_structured_clarification_option(query, structured_options)
+                if selected_option is not None and pending_semantic.get("kind") == "geography":
+                    geographic_choice = (pending_semantic.get("entities") or {}).get(selected_option.id)
+                    if geographic_choice:
+                        query = str(selected_option.value or query)
+                        conversation_manager.clear_pending_semantic_clarification(conv_id)
+                        selected_option = None
                 if selected_option is not None:
                     refined_query = str(selected_option.value or query).strip()
                     semantic_intent = self._build_intent_from_semantic_clarification(
@@ -5652,6 +5776,20 @@ class QueryService:
             # LLM sets alongside the changed fields. This eliminates the
             # separate classifier call (~300ms saved per follow-up).
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
+            if _current_conv_state is not None and not (
+                _current_conv_state.base_currency and _current_conv_state.target_currency
+            ):
+                # Old saved states omit the roles. Recover them only from the
+                # preceding executed FX intent, never from a bare follow-up.
+                last_intent = conversation_manager.get_last_intent(conv_id)
+                if last_intent is not None and normalize_provider_name(last_intent.apiProvider) == "EXCHANGERATE":
+                    previous_params = last_intent.parameters or {}
+                    legacy_pair = {
+                        "base_currency": previous_params.get("baseCurrency"),
+                        "target_currency": previous_params.get("targetCurrency"),
+                    }
+                    if all(legacy_pair.values()):
+                        _current_conv_state = _current_conv_state.model_copy(update=legacy_pair)
             # Read-time namespace sanitizer (FIX 3): a conversation state
             # persisted before a namespace-guard deploy can still carry a
             # resolved code from a DIFFERENT provider's namespace within the
@@ -5683,7 +5821,8 @@ class QueryService:
             _informational_subtype = None
             _informational_language = None
             _llm_new_query = False
-            if _current_conv_state is not None:
+            pending_geographic_scope = has_geographic_collision(query)
+            if _current_conv_state is not None and not pending_geographic_scope:
                 _delta_extractor = DeltaExtractor(self)
                 # Tier 1: fast regex for structural patterns (country, time, provider)
                 _delta = _delta_extractor.extract(query, _current_conv_state)
@@ -5796,6 +5935,27 @@ class QueryService:
                         _merged_state.routed_provider = "STATSCAN"
                         _merged_state.provider_locked = True
                     _delta_intent = materialize_intent(_merged_state)
+                    _fx_roles_changed = bool(
+                        _delta.changed_base_currency or _delta.changed_target_currency or _delta.reverse_currency_pair
+                    )
+                    _base_currency = _delta_intent.parameters.get("baseCurrency")
+                    _target_currency = _delta_intent.parameters.get("targetCurrency")
+                    if _fx_roles_changed and (not (_base_currency and _target_currency) or _base_currency == _target_currency):
+                        return QueryResponse(
+                            conversationId=conv_id, intent=_delta_intent, clarificationNeeded=True,
+                            clarificationQuestions=[_localized_message("clarify_fx_pair", _delta_intent.language)
+                                                    or "Which two currencies should I use, and in which direction?"],
+                            processingSteps=tracker.to_list(),
+                        )
+                    _fx_pair_defined = bool(_base_currency and _target_currency)
+                    _requested_fx_provider = str(_delta.changed_provider or "")
+                    if _fx_pair_defined and not _requested_fx_provider:
+                        requested_specs = _merged_state.requested_indicators or []
+                        spec_providers = {spec.provider for spec in requested_specs if spec.provider}
+                        if len(spec_providers) == 1:
+                            _requested_fx_provider = next(iter(spec_providers))
+                        elif not requested_specs and _current_conv_state.provider_locked:
+                            _requested_fx_provider = _current_conv_state.routed_provider or _current_conv_state.provider or ""
 
                     # Route the materialized intent through UnifiedRouter.
                     # Skip re-routing when the delta doesn't change the
@@ -5839,6 +5999,11 @@ class QueryService:
                     if _preserve_statscan_delta_provider and _merged_state.statscan_product_id:
                         _delta_intent.parameters["__statscan_product_id"] = _merged_state.statscan_product_id
                         _delta_intent.parameters["__statscan_product_authority"] = "verified_conversation_state"
+                    if _fx_pair_defined:
+                        _delta_intent.apiProvider = normalize_provider_name(_requested_fx_provider or "EXCHANGERATE")
+                        if not _requested_fx_provider:
+                            _provider_locked = False
+                            _delta_intent.parameters.pop("__semantic_provider_locked", None)
                     _delta_scope_changed = (
                         _delta.changed_country is not None
                         or _delta.changed_countries is not None
@@ -5874,7 +6039,7 @@ class QueryService:
                         or _delta.removed_dimensions is not None
                         or _delta.is_new_query
                     )
-                    _skip_reroute = (
+                    _skip_reroute = _fx_pair_defined or (
                         _merged_state.provider
                         and (
                             _delta.changed_provider is not None
@@ -5954,15 +6119,20 @@ class QueryService:
                     )
                     _indicator_changed = (
                         _delta.changed_indicator is not None
-                        or _delta.added_indicators is not None
+                        or _delta.added_indicators is not None or _delta.added_indicator_specs is not None
                         or _delta.changed_trade_flow is not None
                         or _frequency_changed
                         or _provider_changed
+                        or _fx_roles_changed
                     )
                     _delta_intent.parameters["__delta_resolved"] = True
                     _delta_intent.parameters["__delta_indicator_changed"] = _indicator_changed
 
-                    if _provider_changed and _delta.changed_indicator is None:
+                    if (
+                        _provider_changed
+                        and _delta.changed_indicator is None
+                        and not is_multi_indicator_intent(_delta_intent)
+                    ):
                         # The carried indicators may hold the PRIOR provider's
                         # native code (e.g. FRED 'GDPA'). A different provider
                         # must re-resolve from the SEMANTIC indicator phrase —
@@ -6062,22 +6232,13 @@ class QueryService:
                         and not _delta_response.clarificationNeeded
                     ):
                         try:
-                            _merged_state.provider = normalize_provider_name(_delta_intent.apiProvider or _merged_state.provider or _merged_state.routed_provider or "")
-                            _merged_state.routed_provider = _merged_state.provider
                             _merged_state.provider_locked = bool(
                                 (_delta_intent.parameters or {}).get("__semantic_provider_locked")
                                 or _merged_state.provider_locked
                             )
-                            _resolved_code = (_delta_intent.parameters or {}).get("indicator")
-                            if _resolved_code:
-                                _merged_state.resolved_indicator_code = str(_resolved_code)
-                            if _delta_response.data:
-                                update_answer_members_from_data(
-                                    _merged_state,
-                                    _delta_response.data,
-                                    intent=_delta_intent,
-                                )
-                            conversation_manager.set_conversation_state(conv_id, _merged_state)
+                            self._persist_verified_conversation_state(
+                                conv_id, _merged_state, _delta_response.data, intent=_delta_intent,
+                            )
                         except Exception as _persist_exc:
                             logger.warning("Failed to persist resolved_indicator_code in delta path: %s", _persist_exc)
 
@@ -6234,7 +6395,7 @@ class QueryService:
             # conversation context AND no message history — the parse below
             # receives `history`, and a history-influenced parse stored under
             # the global query-text key would leak across conversations.
-            _use_intent_cache = conversation_context is None and not history
+            _use_intent_cache = conversation_context is None and not history and not pending_geographic_scope
             _query_hash = _intent_cache_key(query) if _use_intent_cache else None
             _cached = _get_cached_parse_result(_query_hash) if _query_hash else None
 
@@ -6324,18 +6485,19 @@ class QueryService:
                             parse_result.catalog_version = _catalog_version
                             _put_cached_parse_result(_query_hash, parse_result)
                 else:
-                    exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
+                    use_shortcut = conversation_context is None and not pending_geographic_scope
+                    exact_code_intent = self._build_explicit_provider_code_intent(query) if use_shortcut else None
                     # Read the snapshot token BEFORE the builder runs: if the
                     # catalog changes mid-build the stamp is already stale, so
                     # a later cache hit re-checks instead of trusting it.
                     _catalog_version = (
                         self._exact_title_catalog_version()
-                        if conversation_context is None and exact_code_intent is None
+                        if use_shortcut and exact_code_intent is None
                         else None
                     )
                     exact_title_intent = (
                         await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
-                        if conversation_context is None and exact_code_intent is None
+                        if use_shortcut and exact_code_intent is None
                         else None
                     )
                     shortcut_intent = exact_code_intent or exact_title_intent
@@ -6363,6 +6525,17 @@ class QueryService:
                         logger.info("⚡ Intent cache STORE for: %s", query[:60])
 
                 intent = parse_result.intent
+                if pending_geographic_scope:
+                    if geographic_choice:
+                        for collision in geographic_name_collisions(query):
+                            if geographic_choice in collision["entities"]:
+                                apply_geographic_entity(intent, geographic_choice, collision)
+                    geometry_response = await resolve_geographic_identity(
+                        self, query, intent, conv_id,
+                        previous_state=_current_conv_state, processing_steps=tracker.to_list(),
+                    )
+                    if geometry_response is not None:
+                        return geometry_response
                 # Ensure originalQuery stores the user's raw query, not the
                 # context-enriched version sent to the LLM.
                 intent.originalQuery = query
@@ -6688,22 +6861,17 @@ class QueryService:
             if is_multi_indicator:
                 logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
                 data = await self._fetch_multi_indicator_data(intent)
-                if (
-                    provider_locked
-                    and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK", "OECD", "EUROSTAT"}
-                    and len(data or []) < len(intent.indicators or [])
-                ):
-                    logger.info(
-                        "🚫 Provider-locked query only resolved %d/%d members; failing closed",
-                        len(data or []),
-                        len(intent.indicators or []),
-                    )
-                    return self._build_no_reliable_indicator_match_response(
-                        conversation_id=conv_id,
-                        intent=intent,
-                        query=query,
-                        processing_steps=tracker.to_list(),
-                    )
+                if provider_locked and data:
+                    requested = {label.strip().casefold() for label in intent.indicators}
+                    established = {
+                        series.requested_indicator.label.casefold() for series in data
+                        if series.requested_indicator is not None
+                    }
+                    if not established and len(data) < len(requested):
+                        return self._build_no_reliable_indicator_match_response(
+                            conversation_id=conv_id, intent=intent, query=query,
+                            processing_steps=tracker.to_list(),
+                        )
             else:
                 # Fetch data with retry logic
                 data = await retry_async(
@@ -6714,6 +6882,7 @@ class QueryService:
 
             if (
                 provider_locked
+                and not is_multi_indicator
                 and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK", "OECD", "EUROSTAT"}
                 and data
                 and self._has_implausible_top_series(query, data)
@@ -6936,6 +7105,8 @@ class QueryService:
                         )
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
+                    if isinstance(fallback_exc, ResultVerificationUnavailable):
+                        exc = fallback_exc
                     if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
                         # Window constraint: no stale cache (same out-of-window
                         # data), no menus. Renders the localized
@@ -6948,7 +7119,7 @@ class QueryService:
 
             # Last resort: serve stale (expired) cached data rather than returning nothing.
             # A 1-hour-old GDP dataset is better than "No Data Available" during an API outage.
-            if "intent" in locals() and intent:
+            if "intent" in locals() and intent and not is_multi_indicator_intent(intent):
                 stale_data = await self._get_stale_from_cache(
                     normalize_provider_name(intent.apiProvider), intent.parameters or {}
                 )
@@ -7081,7 +7252,17 @@ class QueryService:
     async def _fetch_multi_indicator_data(self, intent: ParsedIntent) -> List[NormalizedData]:
         """Delegates to :func:`data_fetcher.fetch_multi_indicator_data`."""
         with self._own_fetch_stage(intent):
-            return await _df_fetch_multi_indicator_data(self, intent)
+            return await _df_fetch_multi_indicator_data(self, intent, fetcher=self._fetch_data)
+
+    async def _matches_retained_measure(self, params: dict, data: List[NormalizedData]) -> Optional[bool]:
+        measure = params.get("__measure_continuity")
+        if not measure or not data or (params.get("baseCurrency") and params.get("targetCurrency")):
+            return True
+        series = data if isinstance(data, list) else [data]
+        return await _smj_verify_followup_measure(
+            self, measure, series,
+            query=str(params.get("__original_query") or params.get("__semantic_indicator_label") or ""),
+        )
 
     async def _fetch_data(
         self,
@@ -7139,11 +7320,38 @@ class QueryService:
             intent.parameters = params0
 
         excluded: List[str] = []
+        params = intent.parameters or {}
+        if (
+            normalize_provider_name(intent.apiProvider) == "FRED"
+            and params.get("baseCurrency") and params.get("targetCurrency")
+            and not _ir_is_exact_match_locked(params)
+        ):
+            # This is a pair request for FRED, not an unrelated FRED series
+            # query. Reuse the existing verified pair/orientation dispatcher.
+            history = await self._fetch_historical_exchange_from_fred(intent, params)
+            if history:
+                return history
+            raise DataNotAvailableError("FRED cannot serve the requested currency pair")
         plan = execution_plan
         while True:
             current_plan = plan
             try:
-                return await _df_fetch_data(self, intent, execution_plan=current_plan)
+                data = await _df_fetch_data(self, intent, execution_plan=current_plan)
+                if (
+                    data and intent.subnationalRegion
+                    and self._subnational_country_conflict(intent, (series.metadata for series in data))
+                ):
+                    raise DataNotAvailableError("Retrieved series conflicts with the requested region's country")
+                params = intent.parameters or {}
+                compatibility = (
+                    await self._matches_retained_measure(params, data)
+                    if params.get("__measure_continuity") else True
+                )
+                if compatibility is None:
+                    raise ResultVerificationUnavailable("The application could not verify the retained measure")
+                if not compatibility:
+                    raise DataNotAvailableError("The returned data could not preserve the previously verified measure")
+                return data
             except DataNotAvailableError as exc:
                 if "no_data_in_requested_window" in str(exc):
                     # The user's TIME WINDOW is the constraint, not the code:
@@ -7437,7 +7645,7 @@ class QueryService:
 
         # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
         # and use the parallel multi-indicator fetch path.
-        is_multi_indicator = bool(intent.indicators and len(intent.indicators) > 1)
+        is_multi_indicator = is_multi_indicator_intent(intent)
 
         # Primary fetch attempt. Only the FETCH's own exception is the
         # provider outcome (fetch_error): a failure in the post-fetch
@@ -7650,6 +7858,8 @@ class QueryService:
                 )
         except Exception as fallback_exc:
             logger.warning("Standard pipeline fallback providers failed: %s", fallback_exc)
+            if isinstance(fallback_exc, ResultVerificationUnavailable):
+                fetch_error = fallback_exc
 
         # Semantic recovery pass: re-phrases the intent (distilled metric /
         # expanded countries) and RE-ROUTES it. After a no-verdict fetch error
@@ -7703,7 +7913,7 @@ class QueryService:
 
         # Last resort: serve stale (expired) cached data rather than nothing
         try:
-            stale_data = await self._get_stale_from_cache(
+            stale_data = None if is_multi_indicator else await self._get_stale_from_cache(
                 normalize_provider_name(intent.apiProvider), intent.parameters or {}
             )
             if stale_data:

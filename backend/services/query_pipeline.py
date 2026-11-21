@@ -48,6 +48,19 @@ class ValidationResult:
     confidence_reason: Optional[str]
 
 
+def is_multi_indicator_intent(intent: ParsedIntent) -> bool:
+    """Distinguish independent measures from a single asset or FX request."""
+    if len(intent.indicators or []) < 2:
+        return False
+    params = intent.parameters or {}
+    provider = normalize_provider_name(intent.apiProvider or "")
+    coins = params.get("coinIds")
+    return not (
+        (provider == "COINGECKO" and isinstance(coins, list) and len(coins) > 1)
+        or (provider == "EXCHANGERATE" and params.get("targetCurrency"))
+    )
+
+
 class QueryPipeline:
     """Reusable query execution stages shared by standard and orchestrated paths."""
 
@@ -209,6 +222,7 @@ class QueryPipeline:
             parsed_intent.apiProvider = explicit_provider
             params = dict(parsed_intent.parameters or {})
             params["__semantic_provider_locked"] = True
+            params["__explicit_provider"] = explicit_provider
             parsed_intent.parameters = params
             routed_provider = explicit_provider
         else:
@@ -244,20 +258,7 @@ class QueryPipeline:
         Multi-indicator queries skip strict validation/confidence checks because
         they are validated during individual fetch attempts.
         """
-        params = intent.parameters or {}
-        provider = normalize_provider_name(intent.apiProvider or "")
-        coin_ids = params.get("coinIds") or []
-        if not isinstance(coin_ids, list):
-            coin_ids = []
-
-        # Some providers encode a single semantic request as multiple asset
-        # members in provider params.  Treat those as one comparison request,
-        # not as a multi-indicator query.
-        is_asset_comparison = provider == "COINGECKO" and len(coin_ids) > 1
-        is_fx_pair_request = provider == "EXCHANGERATE" and bool(params.get("targetCurrency"))
-
-        is_multi_indicator = len(intent.indicators) > 1 and not is_asset_comparison and not is_fx_pair_request
-        if is_multi_indicator:
+        if is_multi_indicator_intent(intent):
             return ValidationResult(
                 is_multi_indicator=True,
                 is_valid=True,

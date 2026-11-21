@@ -1,0 +1,618 @@
+{
+  "source": {
+    "project": "iso-codes",
+    "url": "https://salsa.debian.org/iso-codes-team/iso-codes",
+    "license": "LGPL-2.1-or-later",
+    "copyright": "2001-2008 Alastair McKinstry; 2004-2016 Christian Perrier; 2005-2022 Dr. Tobias Quathamer",
+    "inputs": {
+      "iso_3166-1.json": "f7dc5542a692ad8e23b9b85a6a1800a63f7a05e5246065fac1ede04ed209ce00",
+      "iso_3166-2.json": "0690f1b87cb5645517ab887aefedbe49b96d34928b3be476f1b83c5f989418d0"
+    },
+    "description": "Country/subdivision name collisions derived from the complete installed ISO 3166-1 and 3166-2 registries. Identity candidates only; the model decides whether distinct extents are intended."
+  },
+  "countries": {
+    "AW": "Aruba",
+    "AF": "Afghanistan",
+    "AO": "Angola",
+    "AI": "Anguilla",
+    "AX": "Åland Islands",
+    "AL": "Albania",
+    "AD": "Andorra",
+    "AE": "United Arab Emirates",
+    "AR": "Argentina",
+    "AM": "Armenia",
+    "AS": "American Samoa",
+    "AQ": "Antarctica",
+    "TF": "French Southern Territories",
+    "AG": "Antigua and Barbuda",
+    "AU": "Australia",
+    "AT": "Austria",
+    "AZ": "Azerbaijan",
+    "BI": "Burundi",
+    "BE": "Belgium",
+    "BJ": "Benin",
+    "BQ": "Bonaire, Sint Eustatius and Saba",
+    "BF": "Burkina Faso",
+    "BD": "Bangladesh",
+    "BG": "Bulgaria",
+    "BH": "Bahrain",
+    "BS": "Bahamas",
+    "BA": "Bosnia and Herzegovina",
+    "BL": "Saint Barthélemy",
+    "BY": "Belarus",
+    "BZ": "Belize",
+    "BM": "Bermuda",
+    "BO": "Bolivia",
+    "BR": "Brazil",
+    "BB": "Barbados",
+    "BN": "Brunei Darussalam",
+    "BT": "Bhutan",
+    "BV": "Bouvet Island",
+    "BW": "Botswana",
+    "CF": "Central African Republic",
+    "CA": "Canada",
+    "CC": "Cocos (Keeling) Islands",
+    "CH": "Switzerland",
+    "CL": "Chile",
+    "CN": "China",
+    "CI": "Côte d'Ivoire",
+    "CM": "Cameroon",
+    "CD": "Congo, The Democratic Republic of the",
+    "CG": "Congo",
+    "CK": "Cook Islands",
+    "CO": "Colombia",
+    "KM": "Comoros",
+    "CV": "Cabo Verde",
+    "CR": "Costa Rica",
+    "CU": "Cuba",
+    "CW": "Curaçao",
+    "CX": "Christmas Island",
+    "KY": "Cayman Islands",
+    "CY": "Cyprus",
+    "CZ": "Czechia",
+    "DE": "Germany",
+    "DJ": "Djibouti",
+    "DM": "Dominica",
+    "DK": "Denmark",
+    "DO": "Dominican Republic",
+    "DZ": "Algeria",
+    "EC": "Ecuador",
+    "EG": "Egypt",
+    "ER": "Eritrea",
+    "EH": "Western Sahara",
+    "ES": "Spain",
+    "EE": "Estonia",
+    "ET": "Ethiopia",
+    "FI": "Finland",
+    "FJ": "Fiji",
+    "FK": "Falkland Islands (Malvinas)",
+    "FR": "France",
+    "FO": "Faroe Islands",
+    "FM": "Micronesia, Federated States of",
+    "GA": "Gabon",
+    "GB": "United Kingdom",
+    "GE": "Georgia",
+    "GG": "Guernsey",
+    "GH": "Ghana",
+    "GI": "Gibraltar",
+    "GN": "Guinea",
+    "GP": "Guadeloupe",
+    "GM": "Gambia",
+    "GW": "Guinea-Bissau",
+    "GQ": "Equatorial Guinea",
+    "GR": "Greece",
+    "GD": "Grenada",
+    "GL": "Greenland",
+    "GT": "Guatemala",
+    "GF": "French Guiana",
+    "GU": "Guam",
+    "GY": "Guyana",
+    "HK": "Hong Kong",
+    "HM": "Heard Island and McDonald Islands",
+    "HN": "Honduras",
+    "HR": "Croatia",
+    "HT": "Haiti",
+    "HU": "Hungary",
+    "ID": "Indonesia",
+    "IM": "Isle of Man",
+    "IN": "India",
+    "IO": "British Indian Ocean Territory",
+    "IE": "Ireland",
+    "IR": "Iran, Islamic Republic of",
+    "IQ": "Iraq",
+    "IS": "Iceland",
+    "IL": "Israel",
+    "IT": "Italy",
+    "JM": "Jamaica",
+    "JE": "Jersey",
+    "JO": "Jordan",
+    "JP": "Japan",
+    "KZ": "Kazakhstan",
+    "KE": "Kenya",
+    "KG": "Kyrgyzstan",
+    "KH": "Cambodia",
+    "KI": "Kiribati",
+    "KN": "Saint Kitts and Nevis",
+    "KR": "South Korea",
+    "KW": "Kuwait",
+    "LA": "Lao People's Democratic Republic",
+    "LB": "Lebanon",
+    "LR": "Liberia",
+    "LY": "Libya",
+    "LC": "Saint Lucia",
+    "LI": "Liechtenstein",
+    "LK": "Sri Lanka",
+    "LS": "Lesotho",
+    "LT": "Lithuania",
+    "LU": "Luxembourg",
+    "LV": "Latvia",
+    "MO": "Macao",
+    "MF": "Saint Martin (French part)",
+    "MA": "Morocco",
+    "MC": "Monaco",
+    "MD": "Moldova",
+    "MG": "Madagascar",
+    "MV": "Maldives",
+    "MX": "Mexico",
+    "MH": "Marshall Islands",
+    "MK": "North Macedonia",
+    "ML": "Mali",
+    "MT": "Malta",
+    "MM": "Myanmar",
+    "ME": "Montenegro",
+    "MN": "Mongolia",
+    "MP": "Northern Mariana Islands",
+    "MZ": "Mozambique",
+    "MR": "Mauritania",
+    "MS": "Montserrat",
+    "MQ": "Martinique",
+    "MU": "Mauritius",
+    "MW": "Malawi",
+    "MY": "Malaysia",
+    "YT": "Mayotte",
+    "NA": "Namibia",
+    "NC": "New Caledonia",
+    "NE": "Niger",
+    "NF": "Norfolk Island",
+    "NG": "Nigeria",
+    "NI": "Nicaragua",
+    "NU": "Niue",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "NP": "Nepal",
+    "NR": "Nauru",
+    "NZ": "New Zealand",
+    "OM": "Oman",
+    "PK": "Pakistan",
+    "PA": "Panama",
+    "PN": "Pitcairn",
+    "PE": "Peru",
+    "PH": "Philippines",
+    "PW": "Palau",
+    "PG": "Papua New Guinea",
+    "PL": "Poland",
+    "PR": "Puerto Rico",
+    "KP": "North Korea",
+    "PT": "Portugal",
+    "PY": "Paraguay",
+    "PS": "Palestine, State of",
+    "PF": "French Polynesia",
+    "QA": "Qatar",
+    "RE": "Réunion",
+    "RO": "Romania",
+    "RU": "Russian Federation",
+    "RW": "Rwanda",
+    "SA": "Saudi Arabia",
+    "SD": "Sudan",
+    "SN": "Senegal",
+    "SG": "Singapore",
+    "GS": "South Georgia and the South Sandwich Islands",
+    "SH": "Saint Helena, Ascension and Tristan da Cunha",
+    "SJ": "Svalbard and Jan Mayen",
+    "SB": "Solomon Islands",
+    "SL": "Sierra Leone",
+    "SV": "El Salvador",
+    "SM": "San Marino",
+    "SO": "Somalia",
+    "PM": "Saint Pierre and Miquelon",
+    "RS": "Serbia",
+    "SS": "South Sudan",
+    "ST": "Sao Tome and Principe",
+    "SR": "Suriname",
+    "SK": "Slovakia",
+    "SI": "Slovenia",
+    "SE": "Sweden",
+    "SZ": "Eswatini",
+    "SX": "Sint Maarten (Dutch part)",
+    "SC": "Seychelles",
+    "SY": "Syrian Arab Republic",
+    "TC": "Turks and Caicos Islands",
+    "TD": "Chad",
+    "TG": "Togo",
+    "TH": "Thailand",
+    "TJ": "Tajikistan",
+    "TK": "Tokelau",
+    "TM": "Turkmenistan",
+    "TL": "Timor-Leste",
+    "TO": "Tonga",
+    "TT": "Trinidad and Tobago",
+    "TN": "Tunisia",
+    "TR": "Turkey",
+    "TV": "Tuvalu",
+    "TW": "Taiwan",
+    "TZ": "Tanzania",
+    "UG": "Uganda",
+    "UA": "Ukraine",
+    "UM": "United States Minor Outlying Islands",
+    "UY": "Uruguay",
+    "US": "United States",
+    "UZ": "Uzbekistan",
+    "VA": "Holy See (Vatican City State)",
+    "VC": "Saint Vincent and the Grenadines",
+    "VE": "Venezuela",
+    "VG": "Virgin Islands, British",
+    "VI": "Virgin Islands, U.S.",
+    "VN": "Vietnam",
+    "VU": "Vanuatu",
+    "WF": "Wallis and Futuna",
+    "WS": "Samoa",
+    "YE": "Yemen",
+    "ZA": "South Africa",
+    "ZM": "Zambia",
+    "ZW": "Zimbabwe"
+  },
+  "collisions": {
+    "luxembourg": [
+      {
+        "id": "country:LU",
+        "name": "Luxembourg",
+        "kind": "country",
+        "country": "LU"
+      },
+      {
+        "id": "subdivision:BE-WLX",
+        "name": "Luxembourg",
+        "kind": "subdivision",
+        "country": "BE",
+        "type": "Province",
+        "code": "BE-WLX"
+      },
+      {
+        "id": "subdivision:LU-LU",
+        "name": "Luxembourg",
+        "kind": "subdivision",
+        "country": "LU",
+        "type": "Canton",
+        "code": "LU-LU"
+      }
+    ],
+    "belize": [
+      {
+        "id": "country:BZ",
+        "name": "Belize",
+        "kind": "country",
+        "country": "BZ"
+      },
+      {
+        "id": "subdivision:BZ-BZ",
+        "name": "Belize",
+        "kind": "subdivision",
+        "country": "BZ",
+        "type": "District",
+        "code": "BZ-BZ"
+      }
+    ],
+    "djibouti": [
+      {
+        "id": "country:DJ",
+        "name": "Djibouti",
+        "kind": "country",
+        "country": "DJ"
+      },
+      {
+        "id": "subdivision:DJ-DJ",
+        "name": "Djibouti",
+        "kind": "subdivision",
+        "country": "DJ",
+        "type": "City",
+        "code": "DJ-DJ"
+      }
+    ],
+    "guadeloupe": [
+      {
+        "id": "country:GP",
+        "name": "Guadeloupe",
+        "kind": "country",
+        "country": "GP"
+      },
+      {
+        "id": "subdivision:FR-971",
+        "name": "Guadeloupe",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas department",
+        "code": "FR-971"
+      },
+      {
+        "id": "subdivision:FR-GP",
+        "name": "Guadeloupe",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas region",
+        "code": "FR-GP"
+      }
+    ],
+    "martinique": [
+      {
+        "id": "country:MQ",
+        "name": "Martinique",
+        "kind": "country",
+        "country": "MQ"
+      },
+      {
+        "id": "subdivision:FR-972",
+        "name": "Martinique",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas department",
+        "code": "FR-972"
+      },
+      {
+        "id": "subdivision:FR-MQ",
+        "name": "Martinique",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas region",
+        "code": "FR-MQ"
+      }
+    ],
+    "mayotte": [
+      {
+        "id": "country:YT",
+        "name": "Mayotte",
+        "kind": "country",
+        "country": "YT"
+      },
+      {
+        "id": "subdivision:FR-976",
+        "name": "Mayotte",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas department",
+        "code": "FR-976"
+      },
+      {
+        "id": "subdivision:FR-YT",
+        "name": "Mayotte",
+        "kind": "subdivision",
+        "country": "FR",
+        "type": "Overseas region",
+        "code": "FR-YT"
+      }
+    ],
+    "mali": [
+      {
+        "id": "country:ML",
+        "name": "Mali",
+        "kind": "country",
+        "country": "ML"
+      },
+      {
+        "id": "subdivision:GN-ML",
+        "name": "Mali",
+        "kind": "subdivision",
+        "country": "GN",
+        "type": "Prefecture",
+        "code": "GN-ML"
+      }
+    ],
+    "guatemala": [
+      {
+        "id": "country:GT",
+        "name": "Guatemala",
+        "kind": "country",
+        "country": "GT"
+      },
+      {
+        "id": "subdivision:GT-GU",
+        "name": "Guatemala",
+        "kind": "subdivision",
+        "country": "GT",
+        "type": "Department",
+        "code": "GT-GU"
+      }
+    ],
+    "mexico": [
+      {
+        "id": "country:MX",
+        "name": "Mexico",
+        "kind": "country",
+        "country": "MX"
+      },
+      {
+        "id": "subdivision:MX-MEX",
+        "name": "México",
+        "kind": "subdivision",
+        "country": "MX",
+        "type": "State",
+        "code": "MX-MEX"
+      }
+    ],
+    "niger": [
+      {
+        "id": "country:NE",
+        "name": "Niger",
+        "kind": "country",
+        "country": "NE"
+      },
+      {
+        "id": "subdivision:NG-NI",
+        "name": "Niger",
+        "kind": "subdivision",
+        "country": "NG",
+        "type": "State",
+        "code": "NG-NI"
+      }
+    ],
+    "aruba": [
+      {
+        "id": "country:AW",
+        "name": "Aruba",
+        "kind": "country",
+        "country": "AW"
+      },
+      {
+        "id": "subdivision:NL-AW",
+        "name": "Aruba",
+        "kind": "subdivision",
+        "country": "NL",
+        "type": "Country",
+        "code": "NL-AW"
+      }
+    ],
+    "curacao": [
+      {
+        "id": "country:CW",
+        "name": "Curaçao",
+        "kind": "country",
+        "country": "CW"
+      },
+      {
+        "id": "subdivision:NL-CW",
+        "name": "Curaçao",
+        "kind": "subdivision",
+        "country": "NL",
+        "type": "Country",
+        "code": "NL-CW"
+      }
+    ],
+    "panama": [
+      {
+        "id": "country:PA",
+        "name": "Panama",
+        "kind": "country",
+        "country": "PA"
+      },
+      {
+        "id": "subdivision:PA-8",
+        "name": "Panamá",
+        "kind": "subdivision",
+        "country": "PA",
+        "type": "Province",
+        "code": "PA-8"
+      }
+    ],
+    "american samoa": [
+      {
+        "id": "country:AS",
+        "name": "American Samoa",
+        "kind": "country",
+        "country": "AS"
+      },
+      {
+        "id": "subdivision:US-AS",
+        "name": "American Samoa",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-AS"
+      }
+    ],
+    "georgia": [
+      {
+        "id": "country:GE",
+        "name": "Georgia",
+        "kind": "country",
+        "country": "GE"
+      },
+      {
+        "id": "subdivision:US-GA",
+        "name": "Georgia",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "State",
+        "code": "US-GA"
+      }
+    ],
+    "guam": [
+      {
+        "id": "country:GU",
+        "name": "Guam",
+        "kind": "country",
+        "country": "GU"
+      },
+      {
+        "id": "subdivision:US-GU",
+        "name": "Guam",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-GU"
+      }
+    ],
+    "northern mariana islands": [
+      {
+        "id": "country:MP",
+        "name": "Northern Mariana Islands",
+        "kind": "country",
+        "country": "MP"
+      },
+      {
+        "id": "subdivision:US-MP",
+        "name": "Northern Mariana Islands",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-MP"
+      }
+    ],
+    "puerto rico": [
+      {
+        "id": "country:PR",
+        "name": "Puerto Rico",
+        "kind": "country",
+        "country": "PR"
+      },
+      {
+        "id": "subdivision:US-PR",
+        "name": "Puerto Rico",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-PR"
+      }
+    ],
+    "united states minor outlying islands": [
+      {
+        "id": "country:UM",
+        "name": "United States Minor Outlying Islands",
+        "kind": "country",
+        "country": "UM"
+      },
+      {
+        "id": "subdivision:US-UM",
+        "name": "United States Minor Outlying Islands",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-UM"
+      }
+    ],
+    "virgin islands, u.s.": [
+      {
+        "id": "country:VI",
+        "name": "Virgin Islands, U.S.",
+        "kind": "country",
+        "country": "VI"
+      },
+      {
+        "id": "subdivision:US-VI",
+        "name": "Virgin Islands, U.S.",
+        "kind": "subdivision",
+        "country": "US",
+        "type": "Outlying area",
+        "code": "US-VI"
+      }
+    ]
+  }
+}

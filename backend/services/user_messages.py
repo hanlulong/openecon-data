@@ -76,6 +76,13 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "未发布 **{region}** 级别的数据。"
         ),
     },
+    "subnational_country_mismatch": {
+        "en": (
+            "I could not verify a series for {region} in {country}. "
+            "The retrieved data includes a series for {returned}."
+        ),
+        "zh": "无法确认 {country} 的 {region} 地区序列。检索结果包含 {returned} 的序列。",
+    },
     # (3) Geography coverage warning (geography_validation).
     "country_coverage_partial_with_available": {
         "en": (
@@ -272,6 +279,14 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     # ------------------------------------------------------------------
     # Reply-turn notices: rendered in the language of the turn that BUILT the
     # menu (a bare "2" reply carries no language signal of its own).
+    "clarify_fx_pair": {
+        "en": "Which two currencies should I use, and in which direction?",
+        "zh": "请问要查询哪两种货币，以及哪个兑换方向？",
+    },
+    "measure_verification_unavailable": {
+        "en": "I retrieved information from the source but couldn't verify that the series answers your request. Please try again.",
+        "zh": "已从数据源获取信息，但暂时无法确认这个序列符合您的请求。请重试。",
+    },
     "clarify_invalid_option_number": {
         "en": "Please choose one of the listed option numbers.",
         "zh": "请从列出的选项编号中选择一个。",
@@ -281,6 +296,13 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         "zh": "该选项未返回可用数据，请选择其他选项。",
     },
     # No reliable match.
+    "clarify_options_unverified": {
+        "en": (
+            "I could not verify reliable indicator choices right now. "
+            "This does not mean the data is unavailable. Please try again."
+        ),
+        "zh": "暂时无法确认可靠的指标选项。这不代表数据不存在，请稍后重试。",
+    },
     "clarify_no_reliable_match": {
         "en": (
             "I could not find a reliable indicator and provider combination for "

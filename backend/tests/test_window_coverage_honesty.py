@@ -343,11 +343,22 @@ def test_en_window_miss_wording_never_claims_not_published():
                        notes=["Subnational series: Zhejiang province"])),
 ])
 def test_window_miss_on_region_series_keeps_window_message(region, meta):
-    resp = _window_response(region, [meta])
+    resp = _window_response(region, [meta], country=meta.country)
     before = resp.message
     out = QueryService.__new__(QueryService)._enforce_subnational_fail_closed(resp)
     assert out.error == "no_data_in_requested_window"
     assert out.message == before
+
+
+def test_window_miss_cannot_use_the_country_that_shares_the_state_name():
+    foreign_country = _meta(indicator="GDP for Georgia", country="GE", series_id="NGDPD", source="IMF")
+    resp = _window_response("Georgia", [foreign_country], country="US", provider="IMF")
+
+    out = QueryService.__new__(QueryService)._enforce_subnational_fail_closed(resp)
+
+    assert out.error == "subnational_data_unavailable"
+    assert "Georgia in US" in out.message
+    assert "latest" not in out.message.lower()
 
 
 def test_window_miss_without_fetched_metadata_is_untouched():
@@ -461,7 +472,13 @@ async def test_menu_of_all_national_options_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_menu_with_one_region_option_is_not_failed_closed():
+async def test_menu_with_one_region_option_is_not_failed_closed(monkeypatch):
+    from backend.services.semantic_match_judge import SemanticMatchJudgment
+
+    async def accepted(*args, **kwargs):
+        return SemanticMatchJudgment(decision="match", confidence=0.99)
+
+    monkeypatch.setattr("backend.services.indicator_clarification.judge_fallback_result", accepted)
     qs = _FakeQS(
         {"AAA": _nat("Liaoning disposable income"), "BBB": _nat("Household income")},
         region_hits={"Liaoning disposable income"},

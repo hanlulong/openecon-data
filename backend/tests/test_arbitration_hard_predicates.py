@@ -69,7 +69,7 @@ def test_oecd_is_manual_only_and_gate_honors_explicit_request() -> None:
 
 def _fanout_qs(providers_probed: list, explicit: str | None):
     class _Selector:
-        def _get_candidates_with_scores(self, query, provider, top_k=8):
+        def _get_candidates_with_scores(self, query, provider, top_k=8, *, english_query=None, constraint_query=None):
             providers_probed.append(provider)
             return [], []
 

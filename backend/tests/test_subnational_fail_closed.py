@@ -8,7 +8,12 @@ genuine subnational data), and every non-triggering case passes through.
 """
 from __future__ import annotations
 
+from unittest.mock import Mock
+
+import pytest
+
 from backend.models import Metadata, NormalizedData, ParsedIntent, QueryResponse
+from backend.services.conversation_state_v2 import extract_state_from_intent
 from backend.services.query import QueryService
 
 
@@ -88,6 +93,43 @@ def test_fred_us_state_untouched():
     data = [_series(indicator="California Real GDP", country="US", source="FRED")]
     out = _svc()._enforce_subnational_fail_closed(_resp(intent, data))
     assert out.data == data and out.error is None
+
+
+@pytest.mark.parametrize("include_matching_state", [False, True])
+def test_country_with_same_name_as_requested_state_is_rejected(include_matching_state):
+    intent = _intent(provider="FRED", region="Georgia", country="US")
+    data = [_series(indicator="GDP for Georgia", country="GE", source="FRED")]
+    if include_matching_state:
+        data.append(_series(indicator="GDP in Georgia", country="US", source="FRED"))
+
+    out = _svc()._enforce_subnational_fail_closed(_resp(intent, data))
+
+    assert not out.data
+    assert out.error == "subnational_data_unavailable"
+    assert "Georgia in US" in out.message
+
+
+def test_foreign_result_is_not_written_to_verified_conversation_state(monkeypatch):
+    intent = _intent(provider="FRED", region="Georgia", country="US")
+    data = [_series(indicator="GDP for Georgia", country="GEO", source="FRED")]
+    state = extract_state_from_intent(intent)
+    save_state = Mock()
+    monkeypatch.setattr("backend.services.query.conversation_manager.set_conversation_state", save_state)
+
+    _svc()._persist_verified_conversation_state("c", state, data, intent=intent)
+
+    save_state.assert_not_called()
+
+
+@pytest.mark.parametrize("label", ["US", "Georgia"])
+def test_regional_label_is_not_proof_of_a_different_country(label):
+    intent = _intent(provider="FRED", region="Georgia", country="US")
+    data = [_series(indicator="GDP by state in Georgia", country=label, source="FRED")]
+
+    out = _svc()._enforce_subnational_fail_closed(_resp(intent, data))
+
+    assert out.data == data
+    assert out.error is None
 
 
 def test_no_region_untouched():

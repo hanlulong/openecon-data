@@ -2164,6 +2164,9 @@ class TestResolvedIndicatorCodePreservation:
                 country="JP",
                 countries=["JP"],
                 source_turn=3,
+                series_title="NY.GDP.MKTP.KD.ZG",
+                unit="%",
+                frequency="annual",
             )
         ]
 
@@ -2238,6 +2241,9 @@ class TestResolvedIndicatorCodePreservation:
                 country="JP",
                 countries=["JP"],
                 source_turn=2,
+                series_title="NY.GDP.MKTP.CD",
+                unit="USD",
+                frequency="annual",
             )
         ]
         assert next_state.recent_answer_members == [
@@ -2249,6 +2255,9 @@ class TestResolvedIndicatorCodePreservation:
                 country="US",
                 countries=["US"],
                 source_turn=1,
+                series_title="GDP",
+                unit="USD",
+                frequency="quarterly",
             ),
             AnswerSetMember(
                 provider="WORLDBANK",
@@ -2258,6 +2267,9 @@ class TestResolvedIndicatorCodePreservation:
                 country="JP",
                 countries=["JP"],
                 source_turn=2,
+                series_title="NY.GDP.MKTP.CD",
+                unit="USD",
+                frequency="annual",
             ),
         ]
 

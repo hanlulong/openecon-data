@@ -554,7 +554,8 @@ def test_multi_indicator_fetch_no_fallback_can_follow_is_the_final_stage(
 ):
     seen: list = []
 
-    async def _df_multi(_svc, intent):
+    async def _df_multi(_svc, intent, *, fetcher):
+        assert fetcher == service._fetch_data
         seen.append(in_final_provider_stage())
         return [_series("UNRATE"), _series("CPI")]
 

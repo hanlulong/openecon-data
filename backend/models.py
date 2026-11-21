@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -86,6 +87,27 @@ class Metadata(BaseModel):
         return str(v)
 
 
+class IndicatorSpec(BaseModel):
+    """One requested concept and its user-specified per-measure constraints."""
+
+    label: str = Field(min_length=1)
+    frequency: Optional[str] = None
+    provider: Optional[str] = None
+    series_id: Optional[str] = None
+
+    @field_validator("label")
+    @classmethod
+    def nonblank_label(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("indicator label must not be blank")
+        return value.strip()
+
+    @field_validator("frequency", "provider", "series_id", mode="before")
+    @classmethod
+    def optional_text(cls, value):
+        return str(value).strip() or None if value is not None else None
+
+
 class NormalizedData(BaseModel):
     metadata: Metadata
     data: List[DataPoint]
@@ -95,6 +117,14 @@ class NormalizedData(BaseModel):
     # is an honest partial answer for THIS request, but the result must never
     # be cached as the complete answer (QueryService._save_to_cache).
     _fetch_incomplete: bool = PrivateAttr(default=False)
+    _requested_indicator: Optional[IndicatorSpec] = PrivateAttr(default=None)
+
+    def set_requested_indicator(self, spec: IndicatorSpec) -> None:
+        self._requested_indicator = spec.model_copy(deep=True)
+
+    @property
+    def requested_indicator(self) -> Optional[IndicatorSpec]:
+        return self._requested_indicator
 
     def mark_fetch_incomplete(self) -> None:
         self._fetch_incomplete = True
@@ -227,6 +257,74 @@ class ParsedIntent(BaseModel):
                     'clarificationQuestions must be non-empty when clarificationNeeded=true'
                 )
         return self
+
+
+def constrain_indicator_spec(spec: IndicatorSpec, query: str) -> IndicatorSpec:
+    """An incoming model slot cannot invent a literal code or source constraint."""
+    from .services.indicator_resolution import _exact_provider_code_literal_present
+    from .utils.providers import get_provider_spec
+
+    copied = spec.model_copy(deep=True)
+    if copied.series_id and not _exact_provider_code_literal_present(copied.series_id, query):
+        copied.series_id = None
+    if copied.provider:
+        provider = get_provider_spec(copied.provider)
+        aliases = (
+            (provider.canonical, provider.name, provider.display_name,
+             *provider.bare_aliases, *provider.directive_aliases)
+            if provider else ()
+        )
+        copied.provider = provider.canonical if any(
+            _exact_provider_code_literal_present(alias, query) for alias in aliases
+        ) else None
+    return copied
+
+
+def indicator_specs_from_intent(
+    intent: ParsedIntent, explicit_provider: Optional[str] = None,
+) -> List[IndicatorSpec]:
+    """Read the ordered semantic requests without consuming resolved codes.
+
+    Internal specs come from conversation state and survive mutable execution
+    intents. Optional parser specs attach modifiers to the corresponding label;
+    older parsers need only the existing indicators array.
+    """
+    params = intent.parameters or {}
+    internal = params.get("__indicator_specs")
+    raw_specs = internal if isinstance(internal, list) else params.get("indicatorSpecs")
+    parsed: List[IndicatorSpec] = []
+    for value in raw_specs if isinstance(raw_specs, list) else []:
+        try:
+            parsed.append(IndicatorSpec.model_validate(value))
+        except (ValueError, TypeError):
+            continue
+    if isinstance(internal, list) and parsed and len(parsed) == len(internal):
+        return [spec.model_copy(deep=True) for spec in parsed]
+
+    specs: List[IndicatorSpec] = []
+    for index, label in enumerate(intent.indicators or []):
+        label = str(label).strip()
+        if not label:
+            continue
+        spec = (
+            parsed[index].model_copy(deep=True)
+            if index < len(parsed) and parsed[index].label.casefold() == label.casefold()
+            else IndicatorSpec(label=label)
+        )
+        spec = constrain_indicator_spec(spec, str(intent.originalQuery or ""))
+        spec.frequency = spec.frequency or params.get("frequency")
+        spec.provider = spec.provider or explicit_provider
+        query = str(intent.originalQuery or "")
+        if spec.series_id and not re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(spec.series_id)}(?![A-Za-z0-9_])", query, re.IGNORECASE,
+        ):
+            spec.series_id = None
+        if len(intent.indicators) == 1 and not spec.series_id:
+            code = str(params.get("seriesId") or "").strip()
+            if code and re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", query, re.IGNORECASE):
+                spec.series_id = code
+        specs.append(spec)
+    return specs
 
 
 class ClarificationOption(BaseModel):

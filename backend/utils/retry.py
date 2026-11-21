@@ -24,6 +24,10 @@ class DataNotAvailableError(Exception):
     pass
 
 
+class ResultVerificationUnavailable(DataNotAvailableError):
+    """Data arrived but the application could not verify it for this request."""
+
+
 class ProviderUnavailable(DataNotAvailableError):
     """The provider gave NO verdict on the request: it could not be reached.
 
@@ -121,7 +125,7 @@ def variant_retry_allowed(last_error: BaseException | None) -> bool:
     against a provider that is not answering. ``None`` (a clean empty) and a
     plain DataNotAvailableError keep every existing re-probe.
     """
-    return not is_no_verdict(last_error)
+    return not (is_no_verdict(last_error) or isinstance(last_error, ResultVerificationUnavailable))
 
 
 def aggregate_failure(
@@ -150,6 +154,11 @@ def aggregate_failure(
     provider that did not answer.
     """
     items = list(outcomes)
+    local_failure = next((item for item in items if isinstance(item, ResultVerificationUnavailable)), None)
+    if local_failure is not None and all(
+        isinstance(item, ResultVerificationUnavailable) or is_no_verdict(item) for item in items
+    ):
+        return local_failure
     if not items or not all(
         isinstance(item, BaseException) and is_no_verdict(item) for item in items
     ):

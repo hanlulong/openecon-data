@@ -11,17 +11,37 @@ All functions are pure (no side effects) and fully unit-testable.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
-from ..models import NormalizedData, ParsedIntent
+from ..models import IndicatorSpec, NormalizedData, ParsedIntent, constrain_indicator_spec, indicator_specs_from_intent
 from ..utils.providers import normalize_provider_name
 from .provider_strategy import GEOGRAPHY_ENCODED_PROVIDERS
 from .query_parsing import infer_multi_concept_indicators_from_query
 
 logger = logging.getLogger(__name__)
+
+
+def _currency_operand(value: Any) -> Optional[str]:
+    code = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", code):
+        return None
+    from ..providers.exchangerate import ISO_4217_CURRENCY_CODES
+
+    return code if code in ISO_4217_CURRENCY_CODES else None
+
+
+def is_fx_scoped(state: "ConversationState") -> bool:
+    """Currency roles belong to the request domain, including source fallbacks."""
+    return bool(
+        state.base_currency or state.target_currency
+        or (state.dimensions or {}).get("Currency Pair")
+        or normalize_provider_name(state.provider or state.routed_provider or "") == "EXCHANGERATE"
+    )
 
 
 _DECOMPOSITION_VALUE_TO_TYPE = {
@@ -211,7 +231,8 @@ def build_answer_set_members_from_data(
 
         series_id = str(getattr(metadata, "seriesId", "") or "").strip() or None
         indicator_text = str(getattr(metadata, "indicator", "") or "").strip()
-        indicator_label = semantic_indicator_label or indicator_text or (
+        requested_spec = getattr(dataset, "requested_indicator", None)
+        indicator_label = (requested_spec.label if requested_spec else "") or semantic_indicator_label or indicator_text or (
             str((intent.indicators or [""])[0]).strip() if intent is not None else ""
         )
         country = str(getattr(metadata, "country", "") or "").strip() or None
@@ -229,6 +250,13 @@ def build_answer_set_members_from_data(
                 country=country,
                 countries=_normalize_member_country_list(countries),
                 source_turn=turn_number or None,
+                series_title=indicator_text or None,
+                description=str(getattr(metadata, "description", "") or "").strip() or None,
+                unit=str(getattr(metadata, "unit", "") or "").strip() or None,
+                price_type=str(getattr(metadata, "priceType", "") or "").strip() or None,
+                seasonal_adjustment=str(getattr(metadata, "seasonalAdjustment", "") or "").strip() or None,
+                data_type=str(getattr(metadata, "dataType", "") or "").strip() or None,
+                frequency=str(getattr(metadata, "frequency", "") or "").strip() or None,
             )
         )
 
@@ -403,6 +431,11 @@ def update_answer_members_from_data(
     state.recent_answer_members = [recent_by_key[key] for key in ordered_keys]
 
     params = (intent.parameters or {}) if intent is not None else {}
+    if intent is not None and normalize_provider_name(intent.apiProvider) == "EXCHANGERATE":
+        base = _currency_operand(params.get("baseCurrency"))
+        target = _currency_operand(params.get("targetCurrency"))
+        if base and target:
+            state.base_currency, state.target_currency = base, target
     explicit_statscan_product = "".join(ch for ch in str(params.get("__statscan_product_id") or "") if ch.isdigit())[:8] or None
     latest_statscan_product = explicit_statscan_product
     if not latest_statscan_product:
@@ -423,6 +456,7 @@ def update_answer_members_from_data(
     ]
     if latest_coin_ids:
         state.coin_ids = list(dict.fromkeys(latest_coin_ids))
+    state.measure_continuity = build_measure_continuity(state)
     return state
 
 
@@ -488,6 +522,7 @@ class ConversationState(BaseModel):
 
     # --- Core semantic fields ---
     indicator: Optional[str] = None
+    requested_indicators: Optional[List[IndicatorSpec]] = None
     base_indicator: Optional[str] = None
     # Provider-specific resolved indicator code (e.g., "NY.GDP.PCAP.CD" for
     # WorldBank, "CPIAUCSL" for FRED).  Populated after a successful fetch so
@@ -508,6 +543,9 @@ class ConversationState(BaseModel):
     # nominal-vs-real and asked or picked variants). Cleared on indicator or
     # provider changes (a new metric/catalog makes prior identity irrelevant).
     continuity_series: Optional[str] = None
+    # Metadata of the last verified measure, distinct from provider-native
+    # identifiers. A country/source/frequency change must not erase its units.
+    measure_continuity: Optional[Dict[str, Any]] = None
     # True when THIS turn's parse classified a geographic scope reset
     # (followUpType=country_change — including sub-region -> whole country).
     # Gates the subnational_region carry below: the parse deliberately nulled
@@ -546,6 +584,9 @@ class ConversationState(BaseModel):
     # --- Crypto-specific fields ---
     coin_ids: Optional[List[str]] = None
     vs_currency: Optional[str] = None
+    # Ordered operands of an FX request; independent of its serving provider.
+    base_currency: Optional[str] = None
+    target_currency: Optional[str] = None
     # The parse's CoinGecko measure enum (parameters.metric: price |
     # market_cap | volume | price_change). Carried so a time/currency-only
     # follow-up keeps the measure the user asked for; cleared with the other
@@ -565,6 +606,11 @@ class ConversationState(BaseModel):
     active_answer_members: Optional[List["AnswerSetMember"]] = None
     recent_answer_members: Optional[List["AnswerSetMember"]] = None
 
+    @field_validator("base_currency", "target_currency", mode="before")
+    @classmethod
+    def _validate_currency_operand(cls, value: Any) -> Optional[str]:
+        return _currency_operand(value)
+
 
 class AnswerSetMember(BaseModel):
     """One verified series/member captured from a successful answer."""
@@ -576,6 +622,62 @@ class AnswerSetMember(BaseModel):
     country: Optional[str] = None
     countries: Optional[List[str]] = None
     source_turn: Optional[int] = None
+    series_title: Optional[str] = None
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    price_type: Optional[str] = None
+    seasonal_adjustment: Optional[str] = None
+    data_type: Optional[str] = None
+    frequency: Optional[str] = None
+
+
+def build_measure_continuity(
+    state: ConversationState, *, members: Optional[List[AnswerSetMember]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Copy verified measure evidence for selection and post-fetch judgment.
+
+    Missing metadata in older conversation records provides no new authority.
+    Country and provider identify the preceding answer, not selection mandates.
+    """
+    evidence = []
+    for member in members if members is not None else (state.active_answer_members or []):
+        attributes = {
+            "title": member.series_title,
+            "description": member.description,
+            "unit": member.unit,
+            "priceType": member.price_type,
+            "seasonalAdjustment": member.seasonal_adjustment,
+            "dataType": member.data_type,
+            "frequency": member.frequency,
+        }
+        if not any(attributes.values()):
+            continue
+        row = {
+            "provider": member.provider,
+            "code": member.series_id or member.provider_code,
+            "country": member.country,
+            "concept": member.indicator_label,
+            **attributes,
+        }
+        evidence.append({
+            key: re.sub(r"[\x00-\x1f\x7f]+", " ", str(value)).strip()[:240]
+            for key, value in row.items() if value
+        })
+    if not evidence:
+        return None
+    payload = {"concept": state.indicator, "series": evidence[:24]}
+    if len(evidence) > 24:
+        payload["truncated"] = True
+    return payload
+
+
+def continuity_hint(state: ConversationState) -> Optional[str]:
+    """Render verified metadata, retaining legacy label/code-only snapshots."""
+    if state.measure_continuity:
+        return json.dumps(state.measure_continuity, ensure_ascii=False, sort_keys=True)
+    if state.resolved_indicator_code:
+        return f"{state.indicator or ''} [{state.resolved_indicator_code}]".strip()
+    return state.continuity_series
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +695,7 @@ class FollowUpDelta(BaseModel):
     # --- What changed ---
     changed_indicator: Optional[str] = None
     added_indicators: Optional[List[str]] = None
+    added_indicator_specs: Optional[List[IndicatorSpec]] = None
     changed_country: Optional[str] = None
     changed_countries: Optional[List[str]] = None
     added_countries: Optional[List[str]] = None
@@ -622,6 +725,9 @@ class FollowUpDelta(BaseModel):
     # go, was classified as e.g. language_change, and the persisted
     # ConversationState.crypto_metric re-served the previous measure.
     changed_metric: Optional[str] = None
+    changed_base_currency: Optional[str] = None
+    changed_target_currency: Optional[str] = None
+    reverse_currency_pair: bool = False
 
     # --- Meta ---
     is_new_query: bool = False
@@ -651,6 +757,19 @@ class FollowUpDelta(BaseModel):
     # invariant #8.
     delta_confidence: Optional[float] = None
     needs_full_rewrite: bool = False
+
+    @model_validator(mode="after")
+    def project_added_specs(self) -> "FollowUpDelta":
+        if self.added_indicator_specs:
+            self.added_indicators = list(dict.fromkeys(
+                [*(self.added_indicators or []), *(spec.label for spec in self.added_indicator_specs)]
+            ))
+        return self
+
+    @field_validator("changed_base_currency", "changed_target_currency", mode="before")
+    @classmethod
+    def _validate_currency_operand(cls, value: Any) -> Optional[str]:
+        return _currency_operand(value)
 
     @field_validator("changed_metric", mode="before")
     @classmethod
@@ -699,6 +818,52 @@ def _normalize_chart_type(value: Optional[str]) -> Optional[str]:
 # merge_state
 # ---------------------------------------------------------------------------
 
+def requested_indicator_specs(state: ConversationState) -> List[IndicatorSpec]:
+    """Compatibility projection of legacy state into ordered semantic requests."""
+    if state.requested_indicators:
+        return [spec.model_copy(deep=True) for spec in state.requested_indicators]
+    labels = (
+        list(state.last_indicators_resolved)
+        if len(state.last_indicators_resolved or []) > 1
+        else ([state.indicator] if state.indicator else [])
+    )
+    return [IndicatorSpec(label=label, frequency=state.frequency)
+            for label in labels if str(label or "").strip()]
+
+
+def _merge_indicator_specs(current: ConversationState, delta: FollowUpDelta) -> List[IndicatorSpec]:
+    specs = [] if delta.is_new_query else requested_indicator_specs(current)
+    if delta.changed_indicator:
+        providers = {spec.provider for spec in specs if spec.provider}
+        preserved_provider = next(iter(providers)) if len(providers) == 1 and all(s.provider for s in specs) else None
+        specs = [IndicatorSpec(
+            label=delta.changed_indicator,
+            frequency=None if delta.is_new_query else current.frequency,
+            provider=None if delta.is_new_query else preserved_provider,
+        )]
+    if delta.changed_frequency:
+        for spec in specs:
+            spec.frequency = delta.changed_frequency
+    if delta.changed_provider:
+        for spec in specs:
+            spec.provider = delta.changed_provider
+            spec.series_id = None
+    additions = [constrain_indicator_spec(spec, delta.raw_query or "")
+                 for spec in (delta.added_indicator_specs or [])]
+    provided_labels = {spec.label.casefold() for spec in additions}
+    additions.extend(
+        IndicatorSpec(label=label, frequency=delta.changed_frequency or current.frequency)
+        for label in (delta.added_indicators or []) if label.casefold() not in provided_labels
+    )
+    for spec in additions:
+        if not spec.provider and specs and all(s.provider == specs[0].provider for s in specs):
+            spec.provider = specs[0].provider
+        key = (spec.label.casefold(), spec.frequency, spec.provider, spec.series_id)
+        if not any((s.label.casefold(), s.frequency, s.provider, s.series_id) == key for s in specs):
+            specs.append(spec)
+    return specs
+
+
 def merge_state(current: ConversationState, delta: FollowUpDelta) -> ConversationState:
     """Deterministic merge: apply *delta* to *current* state.
 
@@ -714,12 +879,21 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
        provider change clears it.
     """
 
+    changed_base, changed_target = delta.changed_base_currency, delta.changed_target_currency
+    legacy_pair = str((delta.added_dimensions or {}).get("Currency Pair") or "").strip().upper()
+    legacy_match = re.fullmatch(r"([A-Z]{3})\s*(?:TO|VS|/)\s*([A-Z]{3})", legacy_pair)
+    if legacy_match:
+        changed_base = changed_base or _currency_operand(legacy_match.group(1))
+        changed_target = changed_target or _currency_operand(legacy_match.group(2))
+    currency_pair_changed = bool(changed_base or changed_target or delta.reverse_currency_pair)
+
     if delta.is_new_query:
         initial_dimensions, decomposition_from_dimensions, _ = _interpret_dimension_breakdown(
             delta.added_dimensions
         )
         new_state = ConversationState(
             indicator=delta.changed_indicator,
+            requested_indicators=_merge_indicator_specs(current, delta) or None,
             country=delta.changed_country,
             countries=delta.changed_countries,
             provider=delta.changed_provider,
@@ -734,6 +908,8 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             trade_partner=delta.changed_trade_partner,
             trade_commodity=delta.changed_trade_commodity,
             crypto_metric=delta.changed_metric,
+            base_currency=changed_base,
+            target_currency=changed_target,
             # Language is sticky per conversation (a new topic from the same
             # user stays in their language); the sub-region annotation is
             # topic-specific and resets on a genuinely new query. An explicit
@@ -760,10 +936,14 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.indicator = delta.changed_indicator
         merged.base_indicator = None
         merged.continuity_series = None
+        merged.measure_continuity = None
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         merged.coin_ids = None
         merged.crypto_metric = None
+        if not currency_pair_changed:
+            merged.base_currency = None
+            merged.target_currency = None
         if str(delta.changed_indicator).strip().lower() in {"trade balance", "total trade"} and delta.changed_trade_flow is None:
             merged.trade_flow = None
         if not delta.is_dimension_modifier_change:
@@ -847,9 +1027,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         ).upper()
         if _merged_provider in GEOGRAPHY_ENCODED_PROVIDERS:
             if merged.resolved_indicator_code:
-                merged.continuity_series = (
-                    f"{merged.indicator or ''} [{merged.resolved_indicator_code}]".strip()
-                )
+                merged.continuity_series = continuity_hint(merged)
             merged.resolved_indicator_code = None
             merged.last_indicators_resolved = None
 
@@ -912,7 +1090,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     if delta.changed_provider:
         merged.provider = delta.changed_provider
         merged.provider_locked = True
-        merged.continuity_series = None
+        merged.continuity_series = continuity_hint(merged) if not delta.changed_indicator else None
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         # StatsCan product IDs / cube metadata are provider-namespaced; a
@@ -934,6 +1112,20 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.dimensions = None
         merged.coin_ids = None
         merged.crypto_metric = None
+
+    # Currency roles are request scope, not provider-specific identifiers. A
+    # quote-only change keeps the base even when history was served by FRED.
+    if delta.reverse_currency_pair:
+        merged.base_currency, merged.target_currency = merged.target_currency, merged.base_currency
+    if changed_base:
+        merged.base_currency = changed_base
+    if changed_target:
+        merged.target_currency = changed_target
+    if currency_pair_changed:
+        merged.resolved_indicator_code = None
+        merged.last_indicators_resolved = None
+        merged.continuity_series = None
+        merged.measure_continuity = None
 
     # --- Crypto measure ---
     # Applied after the indicator/provider branches (which clear it) so an
@@ -964,9 +1156,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.frequency = delta.changed_frequency
         if frequency_changed:
             if merged.resolved_indicator_code:
-                merged.continuity_series = (
-                    f"{merged.indicator or ''} [{merged.resolved_indicator_code}]".strip()
-                )
+                merged.continuity_series = continuity_hint(merged)
             merged.resolved_indicator_code = None
             merged.last_indicators_resolved = None
 
@@ -1019,6 +1209,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     if delta.changed_trade_commodity:
         merged.trade_commodity = delta.changed_trade_commodity
 
+    merged.requested_indicators = _merge_indicator_specs(current, delta) or None
     return merged
 
 
@@ -1095,6 +1286,9 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     """
 
     parameters: Dict[str, Any] = {}
+    specs = requested_indicator_specs(state)
+    if specs:
+        parameters["__indicator_specs"] = [spec.model_dump(exclude_none=True) for spec in specs]
 
     # Geography
     if state.countries and len(state.countries) > 1:
@@ -1110,6 +1304,13 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["frequency"] = state.frequency
     if state.continuity_series:
         parameters["__continuity_series"] = state.continuity_series
+    if state.measure_continuity:
+        parameters["__measure_continuity"] = json.loads(json.dumps(state.measure_continuity))
+        parameters["__continuity_series"] = continuity_hint(state)
+    if state.base_currency:
+        parameters["baseCurrency"] = state.base_currency
+    if state.target_currency:
+        parameters["targetCurrency"] = state.target_currency
 
     # Trade
     provider_name = (state.provider or state.routed_provider or "").upper()
@@ -1176,7 +1377,9 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # fetch) and the indicator hasn't changed, use the resolved code to
     # prevent re-resolution drift (e.g., "GDP per capita" re-resolving to
     # total GDP instead of per-capita GDP).
-    if state.dimensions and state.base_indicator:
+    if len(specs) > 1:
+        indicators = [spec.label for spec in specs]
+    elif state.dimensions and state.base_indicator:
         indicators = [state.base_indicator]
     elif state.last_indicators_resolved and len(state.last_indicators_resolved) > 1:
         # Multi-indicator: use the full list from prior turn
@@ -1193,9 +1396,9 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # re-resolve (which causes drift).  Without this, materialize_intent only
     # set parameters["indicator"] for dimension queries, leaving it empty for
     # normal follow-ups and forcing an unnecessary re-resolution cycle.
-    if state.resolved_indicator_code and "indicator" not in parameters:
+    if state.resolved_indicator_code and len(specs) <= 1 and "indicator" not in parameters:
         parameters["indicator"] = state.resolved_indicator_code
-    if state.resolved_indicator_code:
+    if state.resolved_indicator_code and len(specs) <= 1:
         # The code reached state ONLY via _persist_verified_conversation_state
         # after a successful verified fetch, i.e. its semantic authority was
         # established on the turn that resolved it. Carry that authority so
@@ -1205,7 +1408,7 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         # __delta_resolved is set and the indicator did NOT change —
         # mirroring the StatsCan product-authority predicate.
         parameters.setdefault("__semantic_authority", "verified_conversation_state")
-    if state.indicator:
+    if state.indicator and len(specs) <= 1:
         parameters["__semantic_indicator_label"] = state.indicator
 
     # Provider: use explicit provider if set, otherwise default
@@ -1466,6 +1669,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
 
     return ConversationState(
         indicator=indicator,
+        requested_indicators=indicator_specs_from_intent(
+            intent, explicit_provider=params.get("__explicit_provider"),
+        ) or None,
         base_indicator=base_indicator,
         resolved_indicator_code=resolved_indicator_code,
         dimensions=dimensions,
@@ -1491,6 +1697,8 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         trade_commodity=trade_commodity,
         coin_ids=coin_ids,
         vs_currency=vs_currency,
+        base_currency=str(params.get("baseCurrency") or "").strip().upper() or None,
+        target_currency=str(params.get("targetCurrency") or "").strip().upper() or None,
         crypto_metric=crypto_metric,
         decomposition=decomposition,
         chart_type=intent.recommendedChartType,
@@ -1716,6 +1924,14 @@ def merge_new_state_with_previous(
     if not new_state.vs_currency and previous.vs_currency:
         new_state.vs_currency = previous.vs_currency
 
+    if not indicator_changed:
+        if not new_state.base_currency:
+            new_state.base_currency = previous.base_currency
+        if not new_state.target_currency:
+            new_state.target_currency = previous.target_currency
+        if not new_state.measure_continuity and previous.measure_continuity:
+            new_state.measure_continuity = json.loads(json.dumps(previous.measure_continuity))
+
     # --- Display preferences ---
     if not new_state.chart_type and previous.chart_type:
         new_state.chart_type = previous.chart_type
@@ -1838,6 +2054,12 @@ def reset_state_for_topic_change(
     # only the pin is dropped so later turns and re-routing aren't constrained
     # by the previous topic's lock.
     new_state.provider_locked = False
+    new_state.measure_continuity = None
+    new_state.continuity_series = None
+    if new_state.base_currency == previous.base_currency:
+        new_state.base_currency = None
+    if new_state.target_currency == previous.target_currency:
+        new_state.target_currency = None
 
     # Trade fields: drop unless the new topic explicitly re-introduced them.
     # (A true topic change away from trade should not carry COMTRADE scope.)

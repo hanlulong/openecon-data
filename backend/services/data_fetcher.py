@@ -23,14 +23,19 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 import math
+import inspect
 import re
 import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import httpx
 
-from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
-from ..services.indicator_resolution import is_exact_match_locked
+from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent, indicator_specs_from_intent
+from ..services.indicator_resolution import (
+    is_exact_match_locked, _literal_series_id_request, _exact_provider_code_literal_present,
+    _catalog_series_entry, _SINGLE_SERIES_CODE_PROVIDERS,
+    REQUESTED_SERIES_ID_KEY, REQUESTED_SERIES_ID_STATUS_KEY, REQUESTED_SERIES_PROVIDER_KEY,
+)
 from ..services.provider_strategy import (
     PROVIDER_GROUP_AGGREGATES,
     REGION_AS_SERIES_PROVIDERS,
@@ -49,11 +54,13 @@ from ..utils.imf_supportability import imf_exact_provider_surface_supportability
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name, provider_progress_labels
 from ..utils.retry import (
     DataNotAvailableError,
+    ResultVerificationUnavailable,
     aggregate_failure,
     is_provider_unavailable,
     retry_async,
     variant_retry_allowed,
 )
+from ..utils.request_budget import io_remaining
 # Explicit-time-scope detection lives in time_range_defaults (stdlib only) so
 # providers share one detector; the private names stay importable from here
 # for existing callers and tests.
@@ -100,14 +107,17 @@ MULTI_INDICATOR_FETCH_REPORTS: ContextVar[Optional[list]] = ContextVar(
 )
 
 
-def served_series_identity(series: Any) -> tuple[str, str]:
-    """Structural identity of one served series: (source, seriesId-or-indicator)."""
+def served_series_identity(series: Any) -> tuple[str, ...]:
+    """Include scope and measure coordinates when associating results with requests."""
     metadata = getattr(series, "metadata", None)
     source = str(getattr(metadata, "source", "") or "").strip().upper()
     series_id = str(
         getattr(metadata, "seriesId", None) or getattr(metadata, "indicator", None) or ""
     ).strip().upper()
-    return source, series_id
+    return source, series_id, *(
+        str(getattr(metadata, key, "") or "").strip()
+        for key in ("country", "frequency", "unit", "priceType", "seasonalAdjustment")
+    )
 
 
 def multi_indicator_partial_note(missing: str, language: Optional[str] = None) -> str:
@@ -126,6 +136,8 @@ def _multi_indicator_failure_reason(result: Any) -> str:
     transport failure, exhausted 5xx retries, open breaker, cooldown), so the
     indicator is NOT reported as having no data.
     """
+    if isinstance(result, ResultVerificationUnavailable):
+        return "verification_unavailable"
     if isinstance(result, asyncio.TimeoutError):
         return "timeout"
     if is_provider_unavailable(result):
@@ -863,17 +875,7 @@ def _fred_exact_title_targets_country(
     if not title_text:
         return False
 
-    aliases = [
-        alias
-        for alias, code in CountryResolver.COUNTRY_ALIASES.items()
-        # Only full names (>= 4 chars); 3-letter ISO3 codes ("per", "are", "can")
-        # collide with English words and falsely match prose titles.
-        if code == iso2 and len(alias) > 3
-    ]
-    return any(
-        re.search(rf"\b{re.escape(alias.lower())}\b", title_text)
-        for alias in aliases
-    )
+    return _text_targets_country(title_text, iso2)
 
 
 def _country_aliases_for_iso2(iso2: str) -> list[str]:
@@ -899,12 +901,15 @@ def _country_label_for_iso2(iso2: str, fallback: Any = None) -> str:
 
 
 def _text_targets_country(text: str, iso2: str) -> bool:
+    from ..utils.jurisdictions import ambiguous_country_alias
+
     text_lower = str(text or "").lower()
     if not text_lower:
         return False
     return any(
         re.search(rf"\b{re.escape(alias.lower())}\b", text_lower)
         for alias in _country_aliases_for_iso2(iso2)
+        if not ambiguous_country_alias(alias, iso2)
     )
 
 
@@ -3326,6 +3331,21 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 "geography": params.get("geography"),
                 "periods": _statscan_periods_from_date_range(params, 240),
             }
+            semantic_label = str(dynamic_params["indicatorLabel"] or "").strip()
+            if (
+                semantic_label
+                and callable(getattr(svc.statscan_provider, "semantic_coordinate_selector", None))
+                and not params.get("__exact_indicator_title_match")
+                and not (
+                    params.get("__exact_provider_code_match")
+                    and semantic_label.casefold() == str(indicator).strip().casefold()
+                )
+            ):
+                dynamic_params["semanticRequest"] = "\n".join(filter(None, (
+                    semantic_label,
+                    str(intent.resolvedQuery or intent.originalQuery or "").strip(),
+                    str(params.get("frequency") or "").strip(),
+                )))
             if params.get("startDate"):
                 dynamic_params["startDate"] = params.get("startDate")
             if params.get("endDate"):
@@ -3334,7 +3354,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 result = await svc.statscan_provider.fetch_dynamic_data(dynamic_params)
                 return [result]
             except DataNotAvailableError as exc:
-                if not variant_retry_allowed(exc):
+                if dynamic_params.get("semanticRequest") or not variant_retry_allowed(exc):
                     raise
                 logger.warning(f"Dynamic discovery failed for {indicator}, trying vector fetch")
                 series = await svc.statscan_provider.fetch_series(params)
@@ -4120,6 +4140,9 @@ async def fetch_data(
     _assert_provider_map_authority(provider, intent, params)
 
     internal_param_keys = {
+        "__indicator_specs",
+        "indicatorSpecs",
+        "__explicit_provider",
         "__fallback_excluded_providers",
         "__qualifier_checked",
         "__geo_split_child",
@@ -4504,28 +4527,16 @@ async def fetch_data(
     return _disclose_frequency_mismatch(result, params, getattr(intent, "language", None))
 
 
-async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
-    """Fetch data for multiple indicators by making separate API calls for each.
-
-    Args:
-        svc: QueryService instance
-        intent: Parsed intent with multiple indicators
-
-    Returns:
-        Combined list of NormalizedData from all indicator fetches.
-    """
+async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent, *, fetcher=None) -> List[NormalizedData]:
+    """Execute each requested concept independently, including its recovery."""
     from ..services.parameter_validator import ParameterValidator
 
-    all_data: List[NormalizedData] = []
     explicit_provider = svc._normalize_provider_alias(
         svc._detect_explicit_provider(intent.originalQuery or "")
     )
-
     if _normalize_provider_name(explicit_provider or intent.apiProvider) == "IMF":
         supportability_reason = imf_exact_provider_surface_supportability_reason(
-            intent.originalQuery or "",
-            intent.indicators or [],
-            intent.parameters or {},
+            intent.originalQuery or "", intent.indicators or [], intent.parameters or {},
         )
         if supportability_reason:
             raise DataNotAvailableError(
@@ -4535,212 +4546,219 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
                 "broad-proxy substitution. "
                 f"reason={supportability_reason}"
             )
-
-    # Ensure default time periods are applied to base intent first
+    specs = indicator_specs_from_intent(intent, explicit_provider=explicit_provider)
+    if not specs:
+        raise DataNotAvailableError("No requested indicators were supplied")
+    # Snapshot before any resolver is allowed to change an executable intent.
+    intent.parameters = dict(intent.parameters or {})
+    intent.parameters["__indicator_specs"] = [s.model_dump(exclude_none=True) for s in specs]
+    intent.indicators = [s.label for s in specs]
     if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):
-        logger.info("Applying default time periods to multi-indicator query...")
         ParameterValidator.apply_default_time_periods(intent)
 
-    # Create separate intents for each indicator
-    fetch_tasks = []
-    # The provider each leg went to (aligned with fetch_tasks), so an
-    # all-outage can name the providers that did not answer.
-    leg_providers: List[str] = []
-    for indicator in intent.indicators:
-        params = dict(intent.parameters) if intent.parameters else {}
+    # Resolved identities, table coordinates and model authority belong to one
+    # concept. Only shared request scope may pass into an independently resolved leg.
+    resolution_keys = {
+        "indicator", "seriesId", "series_id", "code", "vectorId", "productId",
+        "indicatorSpecs", "dimensions",
+    }
+    shared_internal_keys = {"__time_scope_authority", "__fallback_excluded_providers"}
+    base_params = {
+        k: copy.deepcopy(v) for k, v in intent.parameters.items()
+        if k not in resolution_keys and (not k.startswith("__") or k in shared_internal_keys)
+    }
+    slots = asyncio.Semaphore(4)
+    leg_providers: List[str] = [str(intent.apiProvider)] * len(specs)
 
-        params["indicator"] = indicator
-        # Strip internal flags — each sub-indicator needs independent
-        # resolution through the full pipeline.
-        # Without this, "GDP" gets treated as a literal FRED code instead of
-        # being resolved to the best GDP indicator.
-        params.pop("__delta_resolved", None)
-        params.pop("__delta_indicator_changed", None)
+    async def fetch_leg(index: int):
+        async with slots:
+            spec = specs[index]
+            params = copy.deepcopy(base_params)
+            if spec.frequency:
+                params["frequency"] = spec.frequency
+            else:
+                params.pop("frequency", None)
+            params["__semantic_indicator_label"] = spec.label
+            params["__synthetic_subquery"] = True
+            continuity = (intent.parameters or {}).get("__measure_continuity") or {}
+            matching = [copy.deepcopy(row) for row in continuity.get("series", [])
+                        if isinstance(row, dict) and str(row.get("concept") or "").casefold() == spec.label.casefold()]
+            if matching:
+                params["__measure_continuity"] = {"concept": spec.label, "series": matching}
+            if spec.series_id:
+                params["seriesId"] = spec.series_id
+            if spec.provider or spec.series_id:
+                params["__semantic_provider_locked"] = True
+            provider = _normalize_provider_name(spec.provider or intent.apiProvider)
+            countries = params.get("countries") or ([params["country"]] if params.get("country") else [])
+            country_text = f" for {', '.join(str(c) for c in countries)}" if countries else ""
+            label = region_qualified_indicator_text(intent, provider, spec.label)
+            native = f" ({spec.series_id})" if spec.series_id and spec.series_id not in label else ""
+            frequency = f" {spec.frequency}" if spec.frequency else ""
+            provider_text = f" from {spec.provider}" if spec.provider else ""
+            leg_query = f"{label}{native}{country_text}{frequency}{provider_text}"
+            single = ParsedIntent(
+                apiProvider=provider, indicators=[spec.label], parameters=params,
+                clarificationNeeded=False, confidence=intent.confidence,
+                recommendedChartType=intent.recommendedChartType,
+                subnationalRegion=intent.subnationalRegion, language=intent.language,
+                originalQuery=leg_query, resolvedQuery=leg_query,
+            )
+            # A synthetic retrieval query must not erase a native identifier
+            # the user actually supplied. Reuse the exact-input existence gate
+            # against the real raw turn (or its conserved explicit constraint),
+            # never against newly synthesized wording.
+            code = spec.series_id or spec.label
+            raw_literal = spec.series_id or intent.originalQuery or ""
+            literal_request = None
+            opaque_code = any(ch.isdigit() or ch in "_@.:-" for ch in code)
+            if (spec.series_id or opaque_code) and _exact_provider_code_literal_present(code, raw_literal):
+                candidates = [provider]
+                if not spec.provider:
+                    catalog_matches = list(dict.fromkeys(
+                        _normalize_provider_name(key) for key, catalog in _SINGLE_SERIES_CODE_PROVIDERS.items()
+                        if _catalog_series_entry(catalog, code.split(":", 1)[0])
+                    ))
+                    if len(catalog_matches) == 1:
+                        candidates = catalog_matches
+                    elif len(catalog_matches) > 1:
+                        candidates = []
+                for candidate in candidates:
+                    probe = single.model_copy(deep=True)
+                    probe.apiProvider = candidate
+                    probe.originalQuery = raw_literal
+                    probe.parameters = {"seriesId": code}
+                    try:
+                        request = await _literal_series_id_request(svc, candidate, probe, probe.parameters)
+                    except Exception as exc:
+                        logger.debug("Per-leg literal-code check unavailable for %s: %s", code, exc)
+                        request = None
+                    if request and request.get("status") == "lock":
+                        literal_request = request
+                        single.apiProvider = candidate
+                        spec.series_id = code
+                        spec.provider = candidate
+                        single.parameters.update({
+                            "indicator": request["code"], "seriesId": code,
+                            "__exact_provider_code_match": True,
+                            "__semantic_authority": "exact_user_input",
+                            "__decision_source": "exact_code",
+                            "__semantic_provider_locked": True,
+                            REQUESTED_SERIES_ID_KEY: request["code"],
+                            REQUESTED_SERIES_ID_STATUS_KEY: "lock",
+                            REQUESTED_SERIES_PROVIDER_KEY: candidate,
+                        })
+            if not spec.provider and not spec.series_id and literal_request is None:
+                try:
+                    routed = await svc._select_routed_provider(single.model_copy(deep=True), leg_query)
+                    if routed:
+                        single.apiProvider = routed
+                except Exception as exc:
+                    logger.debug("Per-indicator routing unavailable for %s: %s", spec.label, exc)
+            leg_providers[index] = single.apiProvider
+            executed = single.model_copy(deep=True)
 
-        single_provider = _normalize_provider_name(intent.apiProvider)
-        if explicit_provider:
-            single_provider = explicit_provider
-        else:
+            async def fetch_primary():
+                nonlocal executed
+                executed = single.model_copy(deep=True)
+                return await (fetcher(executed) if fetcher is not None else fetch_data(svc, executed))
+
+            primary_error = None
             try:
-                routing_intent = ParsedIntent(
-                    apiProvider=single_provider,
-                    indicators=[indicator],
-                    parameters=dict(params),
-                    clarificationNeeded=False,
-                    originalQuery=intent.originalQuery,
+                result = await retry_async(
+                    fetch_primary,
+                    max_attempts=2, initial_delay=0.5,
+                    exceptions=(httpx.HTTPError, asyncio.TimeoutError),
                 )
-                routed_provider = await svc._select_routed_provider(
-                    routing_intent,
-                    f"{indicator} {intent.originalQuery or ''}".strip(),
-                )
-                if routed_provider:
-                    single_provider = routed_provider
+                if not result:
+                    raise DataNotAvailableError(f"No data returned for {spec.label}")
             except Exception as exc:
-                logger.debug(
-                    "Multi-indicator provider routing failed for '%s': %s",
-                    indicator,
-                    exc,
+                primary_error = exc
+                result = None
+            if (primary_error is not None and not isinstance(primary_error, ResultVerificationUnavailable)
+                    and not (spec.provider or spec.series_id)):
+                try:
+                    result = await svc._try_with_fallback(single, primary_error)
+                except Exception as exc:
+                    if isinstance(exc, ResultVerificationUnavailable):
+                        primary_error = exc
+                    logger.debug("Per-indicator fallback exhausted for %s: %s", spec.label, exc)
+            if not result:
+                return primary_error or DataNotAvailableError(f"No data returned for {spec.label}")
+            if isinstance(result, NormalizedData):
+                result = [result]
+            if not isinstance(result, list) or not all(isinstance(s, NormalizedData) for s in result):
+                return DataNotAvailableError(f"Invalid provider result for {spec.label}")
+            verify = getattr(svc, "_verify_execution_result", None)
+            if inspect.iscoroutinefunction(verify):
+                verified_intent = single if primary_error is not None else executed
+                error = await verify(
+                    leg_query, verified_intent,
+                    svc._build_minimal_execution_plan(leg_query, verified_intent), result,
                 )
+                if error:
+                    return DataNotAvailableError(str(error))
+            decorated = []
+            for series in result:
+                copied = series.model_copy(deep=True)
+                copied.set_requested_indicator(spec)
+                decorated.append(copied)
+            return decorated
 
-        # Build a contextual query for indicator resolution.
-        # Include country info so the resolution system has full context.
-        country_text = ""
-        countries_list = params.get("countries") or []
-        country_single = params.get("country") or ""
-        if countries_list:
-            country_text = f" for {', '.join(str(c) for c in countries_list[:3])}"
-        elif country_single:
-            country_text = f" for {country_single}"
-        # Region-as-series providers (see provider_strategy) need the region in
-        # the retrieval text or the national series wins for a state request.
-        indicator = region_qualified_indicator_text(intent, single_provider, indicator)
-        narrowed_query = f"{indicator}{country_text}"
-
-        # Provenance: this query string is PIPELINE-SYNTHESIZED (indicator +
-        # country text), not user-typed. The exact-title fail-closed contract
-        # applies only to what the user actually wrote — a synthesized string
-        # that happens to look title-shaped ("unemployment rate for United
-        # States") must fall through to the selector on an exact-title miss,
-        # not dead-end the whole sub-fetch (observed live: the unemployment
-        # leg of "US GDP and unemployment rate" failed entirely).
-        params = {**params, "__synthetic_subquery": True}
-
-        single_intent = ParsedIntent(
-            apiProvider=single_provider,
-            indicators=[indicator],
-            parameters=params,
-            clarificationNeeded=False,
-            confidence=intent.confidence,
-            recommendedChartType=intent.recommendedChartType,
-            originalQuery=narrowed_query,
-        )
-
-        task = retry_async(
-            lambda i=single_intent: fetch_data(svc, i),
-            max_attempts=2,
-            initial_delay=0.5,
-            # Do NOT retry DataNotAvailableError here: providers already run
-            # transient transport retries (3 attempts via the BaseProvider
-            # helpers) before raising it terminally, so re-entering the
-            # provider doubles every HTTP attempt and burns API quota, while
-            # deterministic "no data" never heals on retry. It propagates
-            # immediately (retry_async only catches `exceptions`). The outer
-            # retry remains for orchestration-level timeouts and raw httpx
-            # errors that escape provider wrapping.
-            exceptions=(httpx.HTTPError, asyncio.TimeoutError),
-        )
-        fetch_tasks.append(task)
-        leg_providers.append(single_provider)
-
-    # Fetch all indicators in parallel with a total timeout
-    num_countries = len(
-        (intent.parameters.get("countries") or []) if intent.parameters else []
-    )
-    total_timeout = min(90, 45 + max(0, num_countries - 3) * 5)
-    logger.info(
-        "Fetching %s indicators in parallel (timeout=%ds, countries=%d)...",
-        len(fetch_tasks), total_timeout, num_countries,
-    )
-
-    # Create explicit tasks so that, on a total-timeout, indicators that have
-    # ALREADY completed are preserved instead of being discarded. asyncio.wait
-    # returns (done, pending) when the timeout elapses; we harvest results from
-    # the done tasks and cancel the pending ones. This keeps every successful
-    # indicator even if one slow indicator blows the overall budget.
-    tasks = [asyncio.ensure_future(t) for t in fetch_tasks]
-    done, pending = await asyncio.wait(
-        tasks,
-        timeout=total_timeout,
-        return_when=asyncio.ALL_COMPLETED,
-    )
-
-    if pending:
-        logger.warning(
-            "Multi-indicator fetch timed out after %ds -- returning %d/%d "
-            "completed indicators and cancelling %d pending",
-            total_timeout, len(done), len(tasks), len(pending),
-        )
-        for task in pending:
-            task.cancel()
-
-    # Harvest results in original task-creation order so the enumerate() loop
-    # below stays index-aligned with intent.indicators for logging. Completed
-    # tasks contribute their result (or their exception); still-pending tasks
-    # contribute a TimeoutError sentinel that the loop already tolerates.
-    results: list = []
+    # The former primary-only cutoff could cancel recovery after all sources
+    # timed out. The existing 90-second ceiling now includes each leg's fallback;
+    # the actual request's remaining I/O budget can only shorten it.
+    remaining = io_remaining()
+    total_timeout = min(90.0, max(0.0, remaining)) if remaining is not None else 90.0
+    tasks = [asyncio.create_task(fetch_leg(index)) for index in range(len(specs))]
+    done = set()
+    pending = set(tasks)
+    try:
+        done, pending = await asyncio.wait(tasks, timeout=total_timeout)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    results = []
     for task in tasks:
-        if task in done:
-            exc = task.exception()
-            if exc is not None:
-                results.append(exc)
-            else:
-                results.append(task.result())
-        else:
+        if task in pending:
             results.append(asyncio.TimeoutError("indicator fetch timed out"))
-
-    # Collect successful results, tracking which indicators produced nothing so
-    # a PARTIAL success can surface a transparency note instead of silently
-    # dropping the missing series (F6). An empty list counts as a failure for
-    # that indicator (a provider that returned [] served nothing usable).
-    failed_indicators: list[str] = []
-    unserved: list[dict[str, str]] = []
-    for i, result in enumerate(results):
-        indicator_name = intent.indicators[i] if i < len(intent.indicators) else "unknown"
-        if isinstance(result, Exception):
-            logger.warning("Failed to fetch indicator %s: %s", indicator_name, result)
-            failed_indicators.append(indicator_name)
-            unserved.append({
-                "indicator": indicator_name,
-                "reason": _multi_indicator_failure_reason(result),
-            })
-            continue
-        if isinstance(result, list):
-            if result:
-                all_data.extend(result)
-            else:
-                failed_indicators.append(indicator_name)
-                unserved.append({"indicator": indicator_name, "reason": "no_data"})
-        elif result is not None:
-            all_data.append(result)
+        elif task.cancelled():
+            raise asyncio.CancelledError()
         else:
-            failed_indicators.append(indicator_name)
-            unserved.append({"indicator": indicator_name, "reason": "no_data"})
+            results.append(task.exception() or task.result())
 
+    all_data: List[NormalizedData] = []
+    unserved = []
+    legs = []
+    for index, (spec, result) in enumerate(zip(specs, results)):
+        served = result if isinstance(result, list) else []
+        all_data.extend(served)
+        legs.append({
+            "index": index, "spec": spec.model_dump(exclude_none=True),
+            "served": {served_series_identity(series) for series in served},
+        })
+        if not served:
+            unserved.append({"indicator": spec.label, "reason": _multi_indicator_failure_reason(result)})
+    reports = MULTI_INDICATOR_FETCH_REPORTS.get()
+    intent.parameters["__indicator_specs"] = [spec.model_dump(exclude_none=True) for spec in specs]
+    if reports is not None:
+        reports.append({
+            "requested": [spec.model_dump(exclude_none=True) for spec in specs],
+            "unserved": unserved,
+            "served": {served_series_identity(series) for series in all_data},
+            "legs": legs,
+        })
     if not all_data:
-        # Every leg unanswered (outage / timeout sentinel) -> a typed
-        # no-verdict; any leg that answered keeps the plain verdict.
         raise aggregate_failure(
             results,
-            DataNotAvailableError(
-                f"Could not fetch any of the requested indicators: {', '.join(intent.indicators)}"
-            ),
-            context="Could not fetch any of the requested indicators",
-            sources=leg_providers,
+            DataNotAvailableError(f"Could not fetch any of the requested indicators: {', '.join(s.label for s in specs)}"),
+            context="Could not fetch any of the requested indicators", sources=leg_providers,
         )
-
-    # Partial success: at least one indicator resolved but others did not.
-    # Attach a transparency note (reusing the metadata.notes convention from the
-    # StatsCan coordinate-substitution fix) naming the missing indicators so the
-    # response can explain the gap rather than presenting a silently short list.
-    if failed_indicators:
-        missing = ", ".join(dict.fromkeys(failed_indicators))
-        # Localize the transparency note to the query's language (available on
-        # the intent here); English is the guaranteed fallback.
-        note = multi_indicator_partial_note(missing, getattr(intent, "language", None))
-        first_meta = all_data[0].metadata
-        existing_notes = list(first_meta.notes or [])
-        existing_notes.append(note)
-        first_meta.notes = existing_notes
-        reports = MULTI_INDICATOR_FETCH_REPORTS.get()
-        if reports is not None:
-            # One entry per indicator name, in request order.
-            unserved_by_name: dict[str, dict[str, str]] = {}
-            for item in unserved:
-                unserved_by_name.setdefault(item["indicator"], dict(item))
-            reports.append({
-                "unserved": list(unserved_by_name.values()),
-                "served": {served_series_identity(series) for series in all_data},
-            })
-
-    logger.info("Successfully fetched %s datasets for %s indicators", len(all_data), len(intent.indicators))
+    if unserved:
+        note = multi_indicator_partial_note(", ".join(item["indicator"] for item in unserved), intent.language)
+        for series in all_data:
+            series.metadata.notes = [note] + list(series.metadata.notes or [])
+            series.mark_fetch_incomplete()
     return all_data

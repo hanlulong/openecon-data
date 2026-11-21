@@ -496,12 +496,14 @@ def is_fallback_relevant(
         returned_iso2: set[str] = set()
         for data in fallback_result:
             if not data.metadata or not data.metadata.country:
-                continue
+                logger.warning("Fallback rejected: requested geography is known but returned country is unverified")
+                return False
 
             result_country = data.metadata.country
             result_iso2 = normalize_country_to_iso2(result_country)
             if not result_iso2:
-                continue
+                logger.warning("Fallback rejected: returned country could not be normalized: %s", result_country)
+                return False
 
             saw_normalized_country = True
             returned_iso2.add(result_iso2)

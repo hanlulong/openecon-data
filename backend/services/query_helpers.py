@@ -77,6 +77,13 @@ def apply_country_overrides(
         if isinstance(current_countries_raw, list) else []
     )
 
+    # A parsed region belongs to its already-known parent. Detecting the same
+    # surface name as a country must not add a second entity (e.g. a country
+    # alias embedded in a state's name). Identity ambiguity is resolved by
+    # geographic_identity, not by alias extraction.
+    if intent.subnationalRegion and current_country and CountryResolver.normalize(current_country):
+        return
+
     def _is_us(value: str) -> bool:
         return value.strip().lower() in {"us", "usa", "united states", "america"}
 

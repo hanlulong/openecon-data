@@ -24,8 +24,10 @@ from .conversation_state_v2 import (
     FollowUpDelta,
     delta_metric_in_scope,
     is_coingecko_scoped,
+    is_fx_scoped,
 )
 from ..routing.country_resolver import CountryResolver
+from ..utils.providers import normalize_provider_name
 
 if TYPE_CHECKING:
     from .query import QueryService
@@ -540,6 +542,8 @@ class DeltaExtractor:
         logger.info("Delta: exchange-rate pair change → %s", pair_text)
         return FollowUpDelta(
             added_dimensions={"Currency Pair": pair_text},
+            changed_base_currency=base,
+            changed_target_currency=target,
             is_dimension_modifier_change=True,
             raw_query=query,
             delta_type="dimension_change",
@@ -929,6 +933,10 @@ class DeltaExtractor:
         state_lines = []
         if state.indicator:
             state_lines.append(f"  Indicator: {_san(state.indicator)}")
+        if state.requested_indicators:
+            state_lines.append("  Requested measures: " + _san(str([
+                spec.model_dump(exclude_none=True) for spec in state.requested_indicators
+            ])))
         if state.country:
             state_lines.append(f"  Country: {_san(state.country)}")
         if state.countries:
@@ -946,6 +954,9 @@ class DeltaExtractor:
             state_lines.append(f"  End date: {_san(state.end_date)}")
         if state.frequency:
             state_lines.append(f"  Frequency: {_san(state.frequency)}")
+        if state.base_currency or state.target_currency:
+            state_lines.append(f"  FX base currency (one unit of): {_san(state.base_currency or 'unknown')}")
+            state_lines.append(f"  FX target currency (quoted units): {_san(state.target_currency or 'unknown')}")
         if state.dimensions:
             state_lines.append(f"  Dimensions: {_san(str(state.dimensions))}")
         if state.chart_type:
@@ -1077,6 +1088,20 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
      asset (do not put the measure into changed_indicator, never new_query).
      If the asset ALSO changes, set changed_indicator to the new asset as well.
      Leave changed_metric null when the measure is not mentioned (it carries).
+5d. For a currency pair (when CURRENT STATE lists "FX base currency"):
+   - The rate is target-currency units per ONE base-currency unit. Preserve this order.
+   - changed_base_currency and changed_target_currency: ISO-4217 currency codes.
+     Set only the operand the user changes; the other currency carries unchanged.
+   - A request to quote the same base in another currency changes the TARGET.
+     A request to use a different base changes the BASE. Infer these roles from
+     the full state and follow-up, never from the currency's position alone.
+   - reverse_currency_pair=true swaps the known operands when the user requests
+     the inverse quote. Leave it false otherwise. Do not combine reversal with
+     changed operand slots; instead express a fully specified new pair in the slots.
+   - These are parameter_delta changes, not changed_indicator or added_dimensions.
+     Currency roles also apply when historical rates came from a different provider.
+   - Do not invent an unknown counterpart. A genuinely new economic concept is
+     still an indicator switch, which clears the old currency pair.
 6. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, metric_change, new_query, compound_change
 7. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
 8. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
@@ -1092,6 +1117,7 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
    - "by category" / "by sub-category" → changed_decomposition = {{"type": "categories", "entities": null, "axis": "Category"}}
    - "by region" (sub-national, no specific region) → changed_decomposition = {{"type": "regions", "entities": null, "axis": "Geography"}}
 11. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
+    Use added_indicator_specs=[{{"label": "X", "frequency": null, "provider": null, "series_id": null}}] for each added measure's own modifiers. A frequency qualifying the added measure belongs in that spec, NOT changed_frequency; changed_frequency changes the whole existing collection. Copy a provider/code only when the user explicitly requests it; do not invent codes. Keep added_indicators as the same labels.
 
 STEP 3 — TELEMETRY (always populate):
 - delta_confidence: float between 0.0 and 1.0 reflecting your confidence in the extracted delta.
@@ -1159,6 +1185,13 @@ Output the query_type and any changed fields as JSON."""
             # turn into a "change" that re-serves the previous answer.
             if delta.changed_metric and not delta_metric_in_scope(state, delta):
                 delta.changed_metric = None
+            if not (
+                is_fx_scoped(state)
+                or normalize_provider_name(delta.changed_provider or "") == "EXCHANGERATE"
+            ):
+                delta.changed_base_currency = None
+                delta.changed_target_currency = None
+                delta.reverse_currency_pair = False
 
             # For parameter_delta: at least one field must be non-None AND non-empty.
             # LLM may return empty strings/dicts/lists which are truthy but meaningless.
@@ -1172,7 +1205,7 @@ Output the query_type and any changed fields as JSON."""
             has_change = any(
                 _has_value(getattr(delta, f))
                 for f in [
-                    "changed_indicator", "added_indicators",
+                    "changed_indicator", "added_indicators", "added_indicator_specs",
                     "changed_country", "changed_countries",
                     "added_countries", "removed_countries", "changed_provider",
                     "changed_start_date", "changed_end_date",
@@ -1181,8 +1214,9 @@ Output the query_type and any changed fields as JSON."""
                     "changed_chart_type", "changed_language", "changed_trade_flow",
                     "changed_trade_reporter", "changed_trade_partner",
                     "changed_trade_commodity", "changed_metric",
+                    "changed_base_currency", "changed_target_currency",
                 ]
-            ) or delta.is_new_query
+            ) or delta.reverse_currency_pair or delta.is_new_query
 
             if not has_change:
                 logger.info("LLM delta: no changes detected, returning None")

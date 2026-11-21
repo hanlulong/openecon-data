@@ -26,13 +26,26 @@ from backend.services.indicator_clarification import (
     _validate_indicator_choice_option,
     filter_viable_indicator_choice_options,
 )
+from backend.services.semantic_match_judge import SemanticMatchJudgment
 
 
-def _series(indicator: str = "thing", source: str = "FRED") -> NormalizedData:
+@pytest.fixture(autouse=True)
+def _controlled_semantic_verdicts(monkeypatch):
+    # These tests exercise retries and evidence collection; semantic acceptance
+    # is now explicit rather than inferred from the old lexical gate fake.
+    async def judge(qs, **kwargs):
+        code = qs.fetch_calls[-1] if qs.fetch_calls else ""
+        mismatch = code in qs._gate_uncertain
+        return SemanticMatchJudgment(decision="mismatch" if mismatch else "match", confidence=0.99)
+
+    monkeypatch.setattr("backend.services.indicator_clarification.judge_fallback_result", judge)
+
+
+def _series(indicator: str = "thing", source: str = "FRED", code: str = "AAA") -> NormalizedData:
     return NormalizedData(
         metadata=Metadata(
             source=source, indicator=indicator, country="US",
-            frequency="monthly", unit="idx",
+            frequency="monthly", unit="idx", seriesId=code,
         ),
         data=[{"date": "2026-01-01", "value": 1.0}],
     )
@@ -102,14 +115,14 @@ def _intent(region: Optional[str] = None) -> ParsedIntent:
     )
 
 
-OPT_A = "[FRED] Thing A (AAA)"
-OPT_B = "[WorldBank] Thing B (BBB)"
+OPT_A = "[FRED] A — monthly; idx (AAA)"
+OPT_B = "[WorldBank] B — monthly; idx (BBB)"
 
 
 @pytest.mark.asyncio
 async def test_sole_survivor_with_substantive_drops_is_viable_and_collected():
     qs = _FakeQS(
-        fetch_results={"AAA": [_series("A")], "BBB": [_series("B")]},
+        fetch_results={"AAA": [_series("A")], "BBB": [_series("B", "WorldBank", "BBB")]},
         gate_uncertain={"BBB"},  # substantive drop
     )
     collector: Dict[str, Any] = {}
@@ -118,12 +131,12 @@ async def test_sole_survivor_with_substantive_drops_is_viable_and_collected():
     )
     assert viable == [OPT_A]
     assert collector["validated"][OPT_A]
-    assert collector["dropped"][OPT_B] == "substantive:gate_uncertain"
+    assert collector["dropped"][OPT_B] == "substantive:semantic_mismatch"
 
 
 @pytest.mark.asyncio
 async def test_two_viable_options_keep_the_menu_shape():
-    qs = _FakeQS(fetch_results={"AAA": [_series("A")], "BBB": [_series("B")]})
+    qs = _FakeQS(fetch_results={"AAA": [_series("A")], "BBB": [_series("B", "WorldBank", "BBB")]})
     collector: Dict[str, Any] = {}
     viable = await filter_viable_indicator_choice_options(
         qs, "q", _intent(), [OPT_A, OPT_B], collector=collector
@@ -134,7 +147,7 @@ async def test_two_viable_options_keep_the_menu_shape():
 
 @pytest.mark.asyncio
 async def test_transient_competitor_recovering_on_retry_restores_the_menu():
-    flaky = [RuntimeError("boom"), [_series("B")]]  # attempt1 raises, retry OK
+    flaky = [RuntimeError("boom"), [_series("B", "WorldBank", "BBB")]]  # attempt1 raises, retry OK
     qs = _FakeQS(fetch_results={"AAA": [_series("A")], "BBB": flaky})
     collector: Dict[str, Any] = {}
     viable = await filter_viable_indicator_choice_options(

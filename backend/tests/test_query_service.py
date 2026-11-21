@@ -8,7 +8,7 @@ from typing import Any
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from backend.models import ClarificationOption, GeneratedFile, NormalizedData, ParsedIntent, QueryResponse
+from backend.models import ClarificationOption, GeneratedFile, Metadata, NormalizedData, ParsedIntent, QueryResponse
 from backend.providers.comtrade import ComtradeProvider
 from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
@@ -3988,13 +3988,22 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(len(wb_options) >= 1 or len(options) >= 0,
                         "WorldBank age-variant option should pass plausibility")
 
-    def test_build_prefetch_indicator_choice_clarification_clarifies_single_cross_provider_option(self) -> None:
+    def test_build_prefetch_serves_a_verified_single_cross_provider_option(self) -> None:
+        from backend.services.semantic_match_judge import SemanticMatchJudgment
+
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["imports share of gdp"],
             parameters={"countries": ["CN"]},
             clarificationNeeded=False,
             originalQuery="imports share of gdp in china",
+        )
+        imports = NormalizedData(
+            metadata=Metadata(
+                source="World Bank", indicator="Imports of goods and services (% of GDP)",
+                seriesId="NE.IMP.GNFS.ZS", country="China", frequency="annual", unit="Percent of GDP",
+            ),
+            data=[{"date": "2024-01-01", "value": 18.2}],
         )
 
         with patch.object(
@@ -4004,6 +4013,9 @@ class QueryServiceTests(unittest.TestCase):
         ), patch(
             "backend.services.indicator_selector.IndicatorSelector.select",
             AsyncMock(return_value=SelectionResult(source="no_candidates")),
+        ), patch.object(self.service, "_fetch_data", AsyncMock(return_value=[imports])), patch(
+            "backend.services.indicator_clarification.judge_fallback_result",
+            AsyncMock(return_value=SemanticMatchJudgment(decision="match", confidence=1.0)),
         ):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
@@ -4016,11 +4028,9 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        self.assertEqual(intent.apiProvider, "FRED")
-        self.assertNotIn("indicator", intent.parameters)
+        self.assertIsNone(clarification)
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
 
     def test_build_prefetch_indicator_choice_clarification_keeps_selector_accepted_primary(self) -> None:
         self.service.settings.use_outcome_decision_stage = True
@@ -5926,6 +5936,8 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNone(intent.parameters.get("indicator"))
 
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
+        from backend.services.semantic_match_judge import SemanticMatchJudgment
+
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
         conversation_manager.clear_pending_indicator_options(conv_id)
 
@@ -5963,8 +5975,14 @@ class QueryServiceTests(unittest.TestCase):
                 "data": [{"date": "2023-01-01", "value": 1.2}],
             }
         )
+        korea_series = selected_series.model_copy(deep=True)
+        korea_series.metadata.country = "KR"
+        korea_series.data[0].value = 2.4
 
-        with patch.object(self.service, "_fetch_data", return_value=[selected_series]):
+        with patch.object(self.service, "_fetch_data", AsyncMock(return_value=[selected_series, korea_series])), patch(
+            "backend.services.indicator_clarification.judge_fallback_result",
+            AsyncMock(return_value=SemanticMatchJudgment(decision="match", confidence=1.0)),
+        ):
             response = run(
                 self.service._try_resolve_pending_indicator_choice(  # pylint: disable=protected-access
                     query="1",
@@ -5980,6 +5998,7 @@ class QueryServiceTests(unittest.TestCase):
         assert response.intent is not None
         self.assertEqual(response.intent.apiProvider, "IMF")
         self.assertEqual(response.intent.parameters.get("indicator"), "BT_GDP")
+        self.assertEqual({series.metadata.country for series in response.data or []}, {"JP", "KR"})
         self.assertIsNone(conversation_manager.get_pending_indicator_options(conv_id))
 
     def test_build_intent_from_semantic_clarification_sets_country_and_indicator(self) -> None:
@@ -8443,12 +8462,19 @@ class QueryServiceTests(unittest.TestCase):
 
 
     def test_prefetch_does_not_apply_single_cross_provider_fallback_option(self) -> None:
+        from backend.services.semantic_match_judge import SemanticMatchJudgment
+
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["total private households in Canada"],
             parameters={"country": "CA"},
             clarificationNeeded=False,
             originalQuery="total private households in Canada in 2025",
+        )
+        credit = NormalizedData(
+            metadata=Metadata(source="BIS", indicator="Total credit to households", seriesId="HH_ALL",
+                              country="Canada", frequency="quarterly", unit="Percent of GDP"),
+            data=[{"date": "2025-01-01", "value": 88.0}],
         )
 
         def _options(query, option_intent, max_options=4):
@@ -8461,6 +8487,11 @@ class QueryServiceTests(unittest.TestCase):
              patch(
                  "backend.services.indicator_selector.IndicatorSelector.select",
                  AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ), patch.object(self.service, "_fetch_data", AsyncMock(return_value=[credit])), patch(
+                 "backend.services.indicator_clarification.judge_fallback_result",
+                 AsyncMock(return_value=SemanticMatchJudgment(
+                     decision="mismatch", confidence=1.0, reason="Credit is not a count of households",
+                 )),
              ):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
@@ -8512,6 +8543,8 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(hasattr(self.service, "_get_direct_provider_indicator_translation"))
 
     def test_prefetch_clarification_uses_statscan_selector_options_without_guessing(self) -> None:
+        from backend.services.semantic_match_judge import SemanticMatchJudgment
+
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["number of dwellings"],
@@ -8533,8 +8566,21 @@ class QueryServiceTests(unittest.TestCase):
             ],
         )
 
+        async def fetch_candidate(candidate_intent):
+            code = candidate_intent.parameters["indicator"]
+            name = next(option["name"] for option in selector_result.options if option["code"] == code)
+            series = sample_series_with(source="StatsCan", country="CA", indicator=name, series_id=code, unit="Dwellings")
+            series.metadata.frequency = "annual"
+            series.data = [series.data[0].model_copy(update={"date": "2021-01-01"})]
+            return [series]
+
         with patch.object(self.service, "_get_fallback_providers", return_value=[]), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch.object(self.service, "_fetch_data", AsyncMock(side_effect=fetch_candidate)), \
+             patch(
+                 "backend.services.indicator_clarification.judge_fallback_result",
+                 AsyncMock(return_value=SemanticMatchJudgment(decision="match", confidence=0.99)),
+             ), \
              patch(
                  "backend.services.indicator_selector.IndicatorSelector.select",
                  AsyncMock(return_value=selector_result),
@@ -9155,7 +9201,7 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="producer price inflation trend in the us and germany",
         )
 
-        def _candidate_search(_self, query, provider, top_k=50):  # noqa: ANN001
+        def _candidate_search(_self, query, provider, top_k=50, *, english_query=None, constraint_query=None):  # noqa: ANN001
             mapping = {
                 "OECD": ([ ("PPI", "Producer Price Index") ], [0.92]),
                 "WORLDBANK": ([ ("FP.WPI.TOTL.ZG", "Producer price inflation") ], [0.85]),
@@ -9200,7 +9246,7 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="debt service ratio in china",
         )
 
-        def _candidate_search(_self, query, provider, top_k=50):  # noqa: ANN001
+        def _candidate_search(_self, query, provider, top_k=50, *, english_query=None, constraint_query=None):  # noqa: ANN001
             if str(provider or "").upper() == "BIS":
                 return ([ ("WS_DSR", "WS_DSR") ], [0.9])
             return ([], [])
@@ -11102,19 +11148,22 @@ class QueryServiceTests(unittest.TestCase):
 
     def test_process_query_returns_indicator_clarification_when_no_data_and_options_exist(self) -> None:
         intent = ParsedIntent(
-            apiProvider="WORLDBANK",
-            indicators=["producer price inflation"],
-            parameters={"countries": ["US", "DE"]},
+            apiProvider="FRED",
+            indicators=["producer prices"],
+            parameters={
+                "country": "US", "indicator": "PPIFGS",
+                "__semantic_authority": "llm_adjudication",
+            },
             clarificationNeeded=False,
-            originalQuery="producer price inflation trend in the us and germany",
+            originalQuery="producer prices trend in the us",
         )
 
         class _Settings:
             use_langchain_orchestrator = False
 
         options = [
-            "[WORLDBANK] Inflation, consumer prices (annual %) (FP.CPI.TOTL.ZG)",
-            "[OECD] House prices index (HOUSE_PRICES)",
+            "[FRED] Producer Price Index by Commodity: All Commodities (PPIACO)",
+            "[FRED] Producer Price Index by Industry: Total Manufacturing Industries (PCUOMFGOMFG)",
         ]
 
         with patch("backend.config.get_settings", return_value=_Settings()), \
@@ -11122,15 +11171,20 @@ class QueryServiceTests(unittest.TestCase):
              patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
+             patch.object(self.service, "_build_post_parse_clarification", return_value=None), \
              patch.object(self.service, "_fetch_data", return_value=[]), \
              patch.object(self.service, "_try_with_fallback", side_effect=DataNotAvailableError("primary failed")), \
              patch.object(self.service, "_maybe_recover_from_empty_data", return_value=None), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=options):
-            response = run(self.service.process_query("producer price inflation trend in the us and germany", auto_pro_mode=False))
+            response = run(self.service.process_query(intent.originalQuery, auto_pro_mode=False))
 
-        self.assertTrue(response.clarificationNeeded)
+        self.assertTrue(response.clarificationNeeded, response.model_dump())
         joined = "\n".join(response.clarificationQuestions or [])
         self.assertIn("Please choose", joined)
+        self.assertEqual(
+            [(option.provider, option.code) for option in response.clarificationOptions or []],
+            [("FRED", "PPIACO"), ("FRED", "PCUOMFGOMFG")],
+        )
 
     def test_standard_query_processing_uses_semantic_recovery_when_empty(self) -> None:
         intent = ParsedIntent(

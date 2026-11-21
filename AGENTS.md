@@ -31,6 +31,16 @@ plugin, and personal defaults belong in the user-level Codex configuration.
 - Final reports must name changed files, simplifications, verification evidence,
   and remaining risks.
 
+## Core Principle: Fix the Framework
+
+Before planning or making a behavior change, trace the reported failure through
+the shared code and identify where the intended behavior breaks. State what must
+hold for future requests in the same class. Check that the proposed change is at
+the layer that owns that behavior and accounts for other paths through it.
+Use reported queries as regression examples alongside related inputs and
+unaffected controls. Revise a proposal that only makes the reported query pass.
+For semantic decisions, follow the Semantic Resolution Rules below.
+
 ## Critical Decision Gate
 
 Before implementing, committing, deploying, or changing a claim/status gate for

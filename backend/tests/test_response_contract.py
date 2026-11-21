@@ -712,7 +712,7 @@ def test_partial_disclosure_through_the_real_serve_path(pipeline_service):
         is_confident=True, confidence_reason=None,
     )
 
-    async def _fetch(_svc, single_intent):
+    async def _fetch(_svc, single_intent, execution_plan=None):
         name = single_intent.indicators[0]
         if "cpi" in name.lower():
             raise DataNotAvailableError("Invalid request: series does not exist")
@@ -726,7 +726,8 @@ def test_partial_disclosure_through_the_real_serve_path(pipeline_service):
             intent=intent, explicit_provider=None, routed_provider="FRED", validation_warning=None))), \
          patch.object(service.pipeline, "validate_intent", return_value=validation), \
          patch.object(service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
-         patch.object(DF, "fetch_data", new=_fetch):
+         patch.object(service, "_try_with_fallback", new=AsyncMock(side_effect=DataNotAvailableError("No provider serves the missing measure"))), \
+         patch("backend.services.query._df_fetch_data", new=_fetch):
         response = run(service.process_query(intent.originalQuery))
 
     assert response.clarificationNeeded is False
