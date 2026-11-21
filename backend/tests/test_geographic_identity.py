@@ -6,6 +6,8 @@ import pytest
 
 from backend.models import Metadata, NormalizedData, ParsedIntent
 from backend.services import geographic_identity as geo
+from backend.services.conversation_state_v2 import AnswerSetMember, ConversationState
+from backend.services.delta_extractor import DeltaExtractor
 from backend.services.provider_fallback import is_fallback_relevant
 from backend.services.query_helpers import apply_country_overrides
 from backend.utils.jurisdictions import ambiguous_country_alias, geographic_name_collisions, has_geographic_collision
@@ -119,6 +121,92 @@ def test_country_alias_fill_preserves_the_parent_of_a_parsed_subdivision():
     intent = _intent(country="United States", region="Georgia")
     apply_country_overrides(SimpleNamespace(), intent, "GDP of the US state of Georgia")
     assert intent.parameters == {"country": "United States"}
+
+
+@pytest.mark.parametrize("query,slot,country", [
+    ("also Mexico", "added_countries", "MX"),
+    ("remove Mexico", "removed_countries", "MX"),
+    ("compare with Georgia", "added_countries", "GE"),
+])
+def test_verified_country_collection_preserves_structural_country_role(query, slot, country):
+    countries = ["PE", "CO", "BR"] + (["MX"] if slot == "removed_countries" else [])
+    state = ConversationState(
+        indicator="inflation rate", provider="WORLDBANK", countries=countries,
+        active_answer_members=[AnswerSetMember(provider="WORLDBANK", country=code) for code in countries],
+    )
+    delta = DeltaExtractor(SimpleNamespace()).extract(query, state)
+
+    assert getattr(delta, slot) == [country]
+    assert geo.preserves_verified_country_collection(state, delta)
+
+
+@pytest.mark.parametrize("query,override", [
+    ("Georgia", {}),
+    ("also the US state of Georgia", {}),
+    ("also Mexico", {"subnational_region": "Georgia"}),
+    ("also Mexico", {"decomposition": {"type": "provinces"}}),
+    ("also Mexico", {"active_answer_members": []}),
+    ("also Mexico", {"active_answer_members": [AnswerSetMember(provider="WORLDBANK")]}),
+])
+def test_unproven_or_explicitly_different_scope_requires_identity_adjudication(query, override):
+    countries = ["PE", "CO", "BR"]
+    state = ConversationState(
+        indicator="inflation rate", provider="WORLDBANK", countries=countries,
+        active_answer_members=[AnswerSetMember(provider="WORLDBANK", country=code) for code in countries],
+    ).model_copy(update=override)
+    delta = DeltaExtractor(SimpleNamespace()).extract(query, state)
+
+    assert not geo.preserves_verified_country_collection(state, delta)
+
+
+@pytest.mark.parametrize("stale_region", [None, "Georgia"])
+async def test_country_identity_decision_keeps_an_independently_named_peer(monkeypatch, pending, stale_region):
+    judge = AsyncMock(return_value=geo.GeographicIdentityDecision(outcome="select", entity_ids=["country:GE"]))
+    monkeypatch.setattr(geo, "_structured_judgment", judge)
+    intent = _intent(region=stale_region)
+    intent.parameters = {"countries": ["US", "GE", "PE"]}
+    query = "Compare GDP in the United States, Georgia and Peru"
+
+    assert await geo.resolve_geographic_identity(SimpleNamespace(), query, intent, "c") is None
+
+    judge.assert_awaited_once()
+    assert set(intent.parameters["countries"]) == {"US", "GE", "PE"}
+    assert intent.parameters["__geographic_entity"] == "country:GE"
+    assert intent.subnationalRegion is None
+
+
+@pytest.mark.parametrize("ids,accepted", [
+    (["country:MX"], True),
+    (["country:MX", "country:PE", "country:CO", "country:MX"], True),
+    (["country:MX", "country:US"], False),  # Parsed, omitted from the request.
+    (["country:MX", "country:BR"], False),  # Mentioned, absent from parsed scope.
+    (["country:MX", "invented"], False),
+    (["country:MX", "subdivision:US-GA"], False),
+    (["country:MX", "subdivision:MX-MEX"], False),
+    (["country:PE", "country:CO"], False),
+])
+async def test_model_can_select_the_collision_alongside_known_peer_ids(monkeypatch, pending, ids, accepted):
+    judgment = geo.GeographicIdentityDecision(outcome="select", entity_ids=ids)
+    monkeypatch.setattr(geo, "_structured_judgment", AsyncMock(return_value=judgment))
+    intent = _intent(country="MX")
+    countries = ["MX", "PE", "CO"]
+    if "country:BR" not in ids:
+        countries.append("BR")
+    if "country:US" in ids:
+        countries.append("US")
+    intent.parameters = {"countries": countries}
+
+    response = await geo.resolve_geographic_identity(
+        SimpleNamespace(), "inflation in Peru, Colombia, Brazil and Mexico", intent, "c",
+    )
+
+    if accepted:
+        assert response is None
+        assert intent.parameters["__geographic_entity"] == "country:MX"
+        assert set(intent.parameters["countries"]) == {"MX", "PE", "CO", "BR"}
+    else:
+        assert response.clarificationNeeded
+        assert len(response.clarificationOptions) == 2
 
 
 def test_unknown_returned_geography_is_not_proof_of_a_known_requested_country():

@@ -53,7 +53,12 @@ from ..routing.unified_router import (
 )
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult, is_multi_indicator_intent
 from ..routing.country_resolver import CountryResolver
-from .geographic_identity import apply_geographic_entity, has_geographic_collision, resolve_geographic_identity
+from .geographic_identity import (
+    apply_geographic_entity,
+    has_geographic_collision,
+    preserves_verified_country_collection,
+    resolve_geographic_identity,
+)
 from ..utils.jurisdictions import ambiguous_country_alias, geographic_name_collisions
 from ..routing.unified_router import UnifiedRouter
 from ..providers.fred import FREDProvider
@@ -5822,13 +5827,15 @@ class QueryService:
             _informational_language = None
             _llm_new_query = False
             pending_geographic_scope = has_geographic_collision(query)
-            if _current_conv_state is not None and not pending_geographic_scope:
+            if _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
                 # Tier 1: fast regex for structural patterns (country, time, provider)
                 _delta = _delta_extractor.extract(query, _current_conv_state)
+                if pending_geographic_scope and not preserves_verified_country_collection(_current_conv_state, _delta):
+                    _delta = None
                 if _delta is not None:
                     _query_type = "parameter_delta"
-                else:
+                elif not pending_geographic_scope:
                     # Tier 2: combined LLM classification + delta extraction
                     try:
                         _delta = await _delta_extractor.extract_with_llm(
@@ -6529,7 +6536,7 @@ class QueryService:
                     if geographic_choice:
                         for collision in geographic_name_collisions(query):
                             if geographic_choice in collision["entities"]:
-                                apply_geographic_entity(intent, geographic_choice, collision)
+                                apply_geographic_entity(intent, geographic_choice, collision, source_query=query)
                     geometry_response = await resolve_geographic_identity(
                         self, query, intent, conv_id,
                         previous_state=_current_conv_state, processing_steps=tracker.to_list(),
